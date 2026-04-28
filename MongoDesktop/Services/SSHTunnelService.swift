@@ -2,6 +2,7 @@ import Foundation
 import NIOCore
 import NIOPosix
 @preconcurrency import NIOSSH
+import CryptoKit
 
 // MARK: - SSHTunnelError
 
@@ -94,26 +95,6 @@ actor SSHTunnelService {
         }
     }
 
-    private func startSocks5Server(sshChannel: Channel, on group: EventLoopGroup) async throws -> Int {
-        let bootstrap = ServerBootstrap(group: group)
-            .serverChannelOption(ChannelOptions.socket(SocketOptionLevel(SOL_SOCKET), SO_REUSEADDR), value: 1)
-            .childChannelInitializer { channel in
-                channel.pipeline.addHandler(SOCKS5Handler(sshChannel: sshChannel))
-            }
-
-        let serverChannel = try await bootstrap.bind(host: "127.0.0.1", port: 0).get()
-        self.socksServerChannel = serverChannel
-        
-        return serverChannel.localAddress?.port ?? 0
-    }
-
-    private func resolvePath(_ path: String) -> String {
-        if path.hasPrefix("~/") {
-            return FileManager.default.homeDirectoryForCurrentUser.path + path.dropFirst(1)
-        }
-        return path
-    }
-
     @preconcurrency
     private static func configureSSHClientPipeline(on channel: Channel, config: SSHTunnelConfig) -> EventLoopFuture<Void> {
         let clientConfig = SSHClientConfiguration(
@@ -147,6 +128,112 @@ actor SSHTunnelService {
         } catch {
             return pipeline.eventLoop.makeFailedFuture(error)
         }
+    }
+
+    private func startSocks5Server(sshChannel: Channel, on group: EventLoopGroup) async throws -> Int {
+        let bootstrap = ServerBootstrap(group: group)
+            .serverChannelOption(ChannelOptions.socket(SocketOptionLevel(SOL_SOCKET), SO_REUSEADDR), value: 1)
+            .childChannelInitializer { channel in
+                channel.pipeline.addHandler(SOCKS5Handler(sshChannel: sshChannel))
+            }
+
+        let serverChannel = try await bootstrap.bind(host: "127.0.0.1", port: 0).get()
+        self.socksServerChannel = serverChannel
+        
+        return serverChannel.localAddress?.port ?? 0
+    }
+
+    private func resolvePath(_ path: String) -> String {
+        if path.hasPrefix("~/") {
+            return FileManager.default.homeDirectoryForCurrentUser.path + path.dropFirst(1)
+        }
+        return path
+    }
+
+    /// Helper to load private keys from PEM/OpenSSH format
+    fileprivate static func loadPrivateKey(from pemString: String) throws -> NIOSSHPrivateKey {
+        let lines = pemString.components(separatedBy: .newlines)
+        let base64Content = lines.filter { !$0.hasPrefix("-----") && !$0.isEmpty }.joined()
+        guard let data = Data(base64Encoded: base64Content) else {
+            throw SSHTunnelError.configInvalid("Invalid private key format (Base64 decode failed)")
+        }
+
+        if pemString.contains("BEGIN OPENSSH PRIVATE KEY") {
+            var buffer = ByteBufferAllocator().buffer(capacity: data.count)
+            buffer.writeContiguousBytes(data)
+            return try parseOpenSSHPrivateKey(buffer: &buffer)
+        } else if pemString.contains("BEGIN EC PRIVATE KEY") || pemString.contains("BEGIN PRIVATE KEY") {
+            // Try different representations
+            if let key = try? P256.Signing.PrivateKey(derRepresentation: data) {
+                return NIOSSHPrivateKey(p256Key: key)
+            }
+            if let key = try? Curve25519.Signing.PrivateKey(rawRepresentation: data) {
+                return NIOSSHPrivateKey(ed25519Key: key)
+            }
+        }
+        
+        throw SSHTunnelError.configInvalid("Unsupported or encrypted private key format. Please use an unencrypted Ed25519 or P256 key.")
+    }
+
+    private static func parseOpenSSHPrivateKey(buffer: inout ByteBuffer) throws -> NIOSSHPrivateKey {
+        func readNext() -> ByteBuffer? {
+            guard let len = buffer.readInteger(as: UInt32.self) else { return nil }
+            return buffer.readSlice(length: Int(len))
+        }
+
+        // Magic header "openssh-key-v1\0"
+        guard let header = buffer.readBytes(length: 15),
+              header == Array("openssh-key-v1\0".utf8) else {
+            throw SSHTunnelError.configInvalid("Invalid OpenSSH key header")
+        }
+
+        // Cipher name, KDF name, KDF options, Number of keys
+        _ = readNext() // cipher (none)
+        _ = readNext() // kdf (none)
+        _ = readNext() // kdfopts
+        guard let numKeys = buffer.readInteger(as: UInt32.self), numKeys >= 1 else {
+            throw SSHTunnelError.configInvalid("Could not read key count")
+        }
+        
+        // Public key (skip)
+        _ = readNext()
+        
+        // Private key block
+        guard var privBlock = readNext() else { throw SSHTunnelError.configInvalid("Could not read private key block") }
+        
+        // The block contains: check1, check2, keytype, pubkey, privkey, comment, padding
+        func readBlockNext() -> ByteBuffer? {
+            guard let len = privBlock.readInteger(as: UInt32.self) else { return nil }
+            return privBlock.readSlice(length: Int(len))
+        }
+
+        _ = privBlock.readInteger(as: UInt32.self) // skip check1
+        _ = privBlock.readInteger(as: UInt32.self) // skip check2
+        
+        guard let typeData = readBlockNext(),
+              let type = typeData.getString(at: 0, length: typeData.readableBytes) else {
+            throw SSHTunnelError.configInvalid("Could not read key type")
+        }
+        
+        if type == "ssh-ed25519" {
+            _ = readBlockNext() // skip pubkey
+            guard let privKeyData = readBlockNext(),
+                  let seed = privKeyData.getBytes(at: 0, length: 32) else {
+                throw SSHTunnelError.configInvalid("Could not read Ed25519 key")
+            }
+            let key = try Curve25519.Signing.PrivateKey(rawRepresentation: seed)
+            return NIOSSHPrivateKey(ed25519Key: key)
+        } else if type == "ecdsa-sha2-nistp256" {
+            _ = readBlockNext() // curve name
+            _ = readBlockNext() // pubkey
+            guard let privKeyData = readBlockNext(),
+                  let rawKey = privKeyData.getBytes(at: 0, length: privKeyData.readableBytes) else {
+                throw SSHTunnelError.configInvalid("Could not read P256 key")
+            }
+            let key = try P256.Signing.PrivateKey(rawRepresentation: rawKey)
+            return NIOSSHPrivateKey(p256Key: key)
+        }
+        throw SSHTunnelError.configInvalid("Unsupported native key type: \(type)")
     }
 }
 
@@ -199,11 +286,25 @@ private struct SSHAuthenticator: NIOSSHClientUserAuthenticationDelegate {
                 nextChallengePromise.fail(SSHTunnelError.authenticationFailed("Server does not support password authentication"))
             }
         case .privateKey:
-            // NIOSSH 0.13.0 has limited support for loading private keys from files.
-            // For now, we only support ed25519 if we can find a way to parse it, 
-            // but since it's complex to implement a PEM parser here, we'll fail if it's a private key.
-            // Note: A future improvement would be to use a library like swift-crypto-ssh or similar.
-            nextChallengePromise.fail(SSHTunnelError.configInvalid("Native Private Key loading is not yet implemented in this version. Please use password authentication or wait for an update."))
+            if availableMethods.contains(.publicKey) {
+                let path = config.privateKeyPath.hasPrefix("~/") ? FileManager.default.homeDirectoryForCurrentUser.path + config.privateKeyPath.dropFirst(1) : config.privateKeyPath
+                
+                do {
+                    let pemString = try String(contentsOfFile: path, encoding: .utf8)
+                    let privateKey = try SSHTunnelService.loadPrivateKey(from: pemString)
+                    
+                    let offer = NIOSSHUserAuthenticationOffer(
+                        username: config.sshUser,
+                        serviceName: "ssh-connection",
+                        offer: .privateKey(.init(privateKey: privateKey))
+                    )
+                    nextChallengePromise.succeed(offer)
+                } catch {
+                    nextChallengePromise.fail(error)
+                }
+            } else {
+                nextChallengePromise.fail(SSHTunnelError.authenticationFailed("Server does not support public key authentication"))
+            }
         }
     }
 }
@@ -222,10 +323,11 @@ private final class SOCKS5Handler: ChannelInboundHandler {
     init(sshChannel: Channel) { self.sshChannel = sshChannel }
 
     func channelRead(context: ChannelHandlerContext, data: NIOAny) {
-        var buffer = self.unwrapInboundIn(data)
+        let buffer = self.unwrapInboundIn(data)
 
         switch state {
         case .handshake:
+            var buffer = buffer
             guard buffer.readInteger(as: UInt8.self) == 0x05 else {
                 context.close(promise: nil)
                 return
@@ -239,6 +341,7 @@ private final class SOCKS5Handler: ChannelInboundHandler {
             state = .request
 
         case .request:
+            var buffer = buffer
             guard buffer.readInteger(as: UInt8.self) == 0x05 else { return } // ver
             let cmd = buffer.readInteger(as: UInt8.self)
             _ = buffer.readInteger(as: UInt8.self) // rsv
