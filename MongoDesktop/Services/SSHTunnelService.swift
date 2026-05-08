@@ -315,10 +315,11 @@ private final class SOCKS5Handler: ChannelInboundHandler {
     typealias InboundIn = ByteBuffer
     typealias OutboundOut = ByteBuffer
 
-    enum State { case handshake, request, connected }
+    enum State { case handshake, request, connecting, connected }
     private var state: State = .handshake
     private let sshChannel: Channel
     private var remoteChannel: Channel?
+    private var pendingData: ByteBuffer?
 
     init(sshChannel: Channel) { self.sshChannel = sshChannel }
 
@@ -370,35 +371,77 @@ private final class SOCKS5Handler: ChannelInboundHandler {
             
             guard let port = buffer.readInteger(as: UInt16.self) else { return }
             
-            state = .connected
+            if buffer.readableBytes > 0 {
+                self.pendingData = buffer
+            }
+
+            state = .connecting
             let promise = sshChannel.eventLoop.makePromise(of: Channel.self)
             let localChannel = context.channel
             let originatorAddress = context.localAddress!
             
             sshChannel.pipeline.handler(type: NIOSSHHandler.self).whenSuccess { handler in
+                print("[SOCKS5] Requesting directTCPIP to \(host):\(port)")
                 handler.createChannel(promise, channelType: .directTCPIP(.init(targetHost: host, targetPort: Int(port), originatorAddress: originatorAddress))) { channel, _ in
+                    print("[SOCKS5] directTCPIP channel created successfully")
                     self.remoteChannel = channel
                     return channel.pipeline.addHandler(SSHToLocalBridge(localChannel: localChannel))
                 }
             }
             
-            promise.futureResult.whenSuccess { _ in
-                var res = localChannel.allocator.buffer(capacity: 10)
-                res.writeBytes([0x05, 0x00, 0x00, 0x01, 0, 0, 0, 0, 0, 0])
-                localChannel.writeAndFlush(res, promise: nil)
+            promise.futureResult.whenSuccess { channel in
+                localChannel.eventLoop.execute {
+                    print("[SOCKS5] directTCPIP channel active, sending success to client")
+                    self.state = .connected
+                    var res = localChannel.allocator.buffer(capacity: 10)
+                    res.writeBytes([0x05, 0x00, 0x00, 0x01, 0, 0, 0, 0, 0, 0])
+                    localChannel.writeAndFlush(res, promise: nil)
+                    
+                    // Forward any pending data
+                    if let pending = self.pendingData {
+                        print("[SOCKS5] Forwarding \(pending.readableBytes) bytes of pending data to SSH")
+                        let sshData = SSHChannelData(type: .channel, data: .byteBuffer(pending))
+                        channel.writeAndFlush(sshData, promise: nil)
+                        self.pendingData = nil
+                    }
+                }
             }
             
-            promise.futureResult.whenFailure { _ in
-                var res = localChannel.allocator.buffer(capacity: 10)
-                res.writeBytes([0x05, 0x01, 0x00, 0x01, 0, 0, 0, 0, 0, 0])
-                localChannel.writeAndFlush(res, promise: nil)
-                localChannel.close(promise: nil)
+            promise.futureResult.whenFailure { error in
+                localChannel.eventLoop.execute {
+                    print("[SOCKS5] directTCPIP channel failed: \(error)")
+                    var res = localChannel.allocator.buffer(capacity: 10)
+                    res.writeBytes([0x05, 0x01, 0x00, 0x01, 0, 0, 0, 0, 0, 0])
+                    localChannel.writeAndFlush(res, promise: nil)
+                    localChannel.close(promise: nil)
+                }
+            }
+            
+        case .connecting:
+            // Buffer data while connecting
+            var buffer = buffer
+            if pendingData == nil {
+                pendingData = buffer
+            } else {
+                pendingData!.writeBuffer(&buffer)
             }
             
         case .connected:
+            // Log payload
+            print("[SOCKS5] Forwarding \(buffer.readableBytes) bytes to SSH")
             let sshData = SSHChannelData(type: .channel, data: .byteBuffer(buffer))
             remoteChannel?.writeAndFlush(sshData, promise: nil)
         }
+    }
+    
+    func channelInactive(context: ChannelHandlerContext) {
+        print("[SOCKS5] Local channel inactive")
+        remoteChannel?.close(promise: nil)
+    }
+    
+    func errorCaught(context: ChannelHandlerContext, error: Error) {
+        print("[SOCKS5] Error: \(error)")
+        context.close(promise: nil)
     }
 }
 
@@ -408,14 +451,29 @@ private final class SSHToLocalBridge: ChannelInboundHandler {
 
     init(localChannel: Channel) { self.localChannel = localChannel }
 
+    func channelActive(context: ChannelHandlerContext) {
+        context.read()
+    }
+
     func channelRead(context: ChannelHandlerContext, data: NIOAny) {
         let sshData = self.unwrapInboundIn(data)
         if case .byteBuffer(let buffer) = sshData.data {
-            localChannel.writeAndFlush(localChannel.allocator.buffer(buffer: buffer), promise: nil)
+            print("[SSHBridge] Received \(buffer.readableBytes) bytes from SSH")
+            localChannel.writeAndFlush(buffer, promise: nil)
         }
     }
     
+    func channelReadComplete(context: ChannelHandlerContext) {
+        context.read()
+    }
+    
     func channelInactive(context: ChannelHandlerContext) {
+        print("[SSHBridge] SSH channel inactive")
+        localChannel.close(promise: nil)
+    }
+    
+    func errorCaught(context: ChannelHandlerContext, error: Error) {
+        print("[SSHBridge] Error: \(error)")
         localChannel.close(promise: nil)
     }
 }
