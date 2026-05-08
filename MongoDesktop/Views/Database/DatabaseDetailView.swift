@@ -684,6 +684,8 @@ struct JSONNodeView: View {
                     Text("\(key):")
                         .font(.system(.callout, design: .monospaced))
                         .foregroundStyle(Color(red: 0.4, green: 0.7, blue: 1.0))
+                        .textSelection(.enabled)
+                        .lineLimit(1)
                 }
 
                 Text(node.value)
