@@ -103,12 +103,6 @@ struct DocumentTableView: View {
                 }
             }
             .tableStyle(.inset(alternatesRowBackgrounds: true))
-            .onTapGesture(count: 2) {
-                if let firstId = localSelection.first,
-                   let row = rows.first(where: { $0.id == firstId }) {
-                    selectedRowForDetail = row
-                }
-            }
             .contextMenu {
                 if let firstId = localSelection.first,
                    let row = rows.first(where: { $0.id == firstId }) {
