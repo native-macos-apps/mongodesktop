@@ -7,6 +7,7 @@ struct DocumentTableView: View {
     @EnvironmentObject private var globalSettings: GlobalSettings
     @State private var columnCustomization = TableColumnCustomization<DocumentRow>()
     @State private var localSelection: Set<String> = []
+    @State private var selectedRowForDetail: DocumentRow? = nil
     let rows: [DocumentRow]
     @Binding var selection: Set<String>
     let isLoading: Bool
@@ -102,6 +103,16 @@ struct DocumentTableView: View {
                 }
             }
             .tableStyle(.inset(alternatesRowBackgrounds: true))
+            .contextMenu {
+                if let firstId = localSelection.first,
+                   let row = rows.first(where: { $0.id == firstId }) {
+                    Button {
+                        selectedRowForDetail = row
+                    } label: {
+                        Label("View Document Detail", systemImage: "doc.text.magnifyingglass")
+                    }
+                }
+            }
             .id(columns)
             .onAppear {
                 localSelection = selection.intersection(Set(rows.map(\.id)))
@@ -128,6 +139,27 @@ struct DocumentTableView: View {
                 DispatchQueue.main.async {
                     selection = newValue
                 }
+            }
+            .sheet(item: $selectedRowForDetail) { row in
+                NavigationStack {
+                    ScrollView {
+                        JSONDocumentCard(
+                            index: rows.firstIndex(where: { $0.id == row.id }) ?? 0,
+                            document: row.document,
+                            timeZone: globalSettings.displayTimeZone
+                        )
+                        .padding()
+                    }
+                    .navigationTitle("Document Detail")
+                    .toolbar {
+                        ToolbarItem(placement: .confirmationAction) {
+                            Button("Done") {
+                                selectedRowForDetail = nil
+                            }
+                        }
+                    }
+                }
+                .frame(minWidth: 500, minHeight: 400)
             }
             .overlay {
                 if isLoading {
