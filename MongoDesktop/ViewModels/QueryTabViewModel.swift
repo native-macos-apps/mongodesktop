@@ -126,7 +126,8 @@ final class QueryTabViewModel: ObservableObject {
         if trimmed.isEmpty || trimmed == "{}" {
             return BSONDocument()
         }
-        return try BSONDocument(fromJSON: trimmed)
+        let converted = BSONQueryParser.convertBSONToJSON(trimmed)
+        return try BSONDocument(fromJSON: converted)
     }
 
     private func parseQueryOption(_ text: String) throws -> BSONDocument? {
@@ -134,6 +135,7 @@ final class QueryTabViewModel: ObservableObject {
         if trimmed.isEmpty || trimmed == "{}" {
             return nil
         }
-        return try BSONDocument(fromJSON: trimmed)
+        let converted = BSONQueryParser.convertBSONToJSON(trimmed)
+        return try BSONDocument(fromJSON: converted)
     }
 }

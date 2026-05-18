@@ -214,7 +214,8 @@ enum JSONEditorFormatter {
             return nil
         } catch let error as NSError {
             let base = error.localizedDescription
-            let detail = indexedMessage(source: source, error: error)
+            let converted = BSONQueryParser.convertBSONToJSON(source)
+            let detail = indexedMessage(source: converted, error: error)
             return ValidationError(message: detail.isEmpty ? base : "\(base) (\(detail))")
         } catch {
             return ValidationError(message: error.localizedDescription)
@@ -224,7 +225,8 @@ enum JSONEditorFormatter {
     private static func parseObject(from source: String) throws -> Any {
         let trimmed = source.trimmingCharacters(in: .whitespacesAndNewlines)
         let candidate = trimmed.isEmpty ? "{}" : source
-        guard let data = candidate.data(using: .utf8) else {
+        let converted = BSONQueryParser.convertBSONToJSON(candidate)
+        guard let data = converted.data(using: .utf8) else {
             throw NSError(domain: "JSONEditorFormatter", code: 0, userInfo: [NSLocalizedDescriptionKey: "Unable to read JSON content."])
         }
         return try JSONSerialization.jsonObject(with: data, options: [])
