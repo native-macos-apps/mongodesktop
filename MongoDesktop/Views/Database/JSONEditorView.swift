@@ -307,16 +307,77 @@ private final class JSONSyntaxHighlighter {
             color = NSColor.systemPurple
         case .punctuation:
             color = NSColor.secondaryLabelColor
+        case .regex:
+            color = NSColor.systemGreen
+        case .comment:
+            color = NSColor.secondaryLabelColor
         }
         return [.font: baseFont, .foregroundColor: color]
     }
 
     private func tokenRanges(in source: String) -> [Token] {
-        #if canImport(SwiftTreeSitter) && canImport(TreeSitterJSON)
-        return TreeSitterJSONTokenCollector.collect(source: source)
-        #else
-        return []
-        #endif
+        let bsonTokens = BSONQueryParser.tokenize(source)
+        var tokens: [Token] = []
+        var i = 0
+        
+        while i < bsonTokens.count {
+            let token = bsonTokens[i]
+            
+            switch token.kind {
+            case .whitespace:
+                break
+                
+            case .comment:
+                tokens.append(Token(range: token.range, kind: .comment))
+                
+            case .regex:
+                tokens.append(Token(range: token.range, kind: .regex))
+                
+            case .string:
+                if isKey(index: i, in: bsonTokens) {
+                    tokens.append(Token(range: token.range, kind: .key))
+                } else {
+                    tokens.append(Token(range: token.range, kind: .string))
+                }
+                
+            case .punctuation:
+                tokens.append(Token(range: token.range, kind: .punctuation))
+                
+            case .number:
+                tokens.append(Token(range: token.range, kind: .number))
+                
+            case .identifier(let name):
+                if name == "true" || name == "false" || name == "null" {
+                    tokens.append(Token(range: token.range, kind: .keyword))
+                } else if BSONQueryParser.isBSONHelper(name) {
+                    tokens.append(Token(range: token.range, kind: .keyword))
+                } else if name == "new" {
+                    tokens.append(Token(range: token.range, kind: .keyword))
+                } else if isKey(index: i, in: bsonTokens) {
+                    tokens.append(Token(range: token.range, kind: .key))
+                } else {
+                    break
+                }
+            }
+            i += 1
+        }
+        
+        return tokens
+    }
+
+    private func isKey(index: Int, in tokens: [BSONToken]) -> Bool {
+        var j = index + 1
+        while j < tokens.count {
+            switch tokens[j].kind {
+            case .whitespace, .comment:
+                j += 1
+            case .punctuation(let c):
+                return c == ":"
+            default:
+                return false
+            }
+        }
+        return false
     }
 }
 
@@ -331,6 +392,8 @@ private enum TokenKind {
     case number
     case keyword
     case punctuation
+    case regex
+    case comment
 }
 
 #if canImport(SwiftTreeSitter) && canImport(TreeSitterJSON)

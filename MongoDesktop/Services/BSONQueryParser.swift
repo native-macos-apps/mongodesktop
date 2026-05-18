@@ -13,6 +13,7 @@ struct BSONToken {
     }
     let kind: Kind
     let raw: String
+    let range: NSRange
 }
 
 enum BSONQueryParser {
@@ -87,7 +88,7 @@ enum BSONQueryParser {
         return result
     }
     
-    private static func isBSONHelper(_ name: String) -> Bool {
+    static func isBSONHelper(_ name: String) -> Bool {
         let helpers: Set<String> = [
             "ObjectId", "ISODate", "Date", "NumberLong", "NumberInt",
             "NumberDecimal", "UUID", "BinData", "MinKey", "MaxKey",
@@ -96,23 +97,27 @@ enum BSONQueryParser {
         return helpers.contains(name)
     }
     
-    private static func tokenize(_ source: String) -> [BSONToken] {
+    static func tokenize(_ source: String) -> [BSONToken] {
         var tokens: [BSONToken] = []
         let chars = Array(source)
         var i = 0
         let n = chars.count
+        var utf16Offset = 0
         
         while i < n {
+            let startOffset = utf16Offset
             let c = chars[i]
             
             // Whitespace
             if c.isWhitespace {
                 let start = i
                 while i < n && chars[i].isWhitespace {
+                    utf16Offset += String(chars[i]).utf16.count
                     i += 1
                 }
                 let raw = String(chars[start..<i])
-                tokens.append(BSONToken(kind: .whitespace(raw), raw: raw))
+                let range = NSRange(location: startOffset, length: utf16Offset - startOffset)
+                tokens.append(BSONToken(kind: .whitespace(raw), raw: raw, range: range))
                 continue
             }
             
@@ -122,33 +127,43 @@ enum BSONQueryParser {
                     // Line comment
                     let start = i
                     while i < n && chars[i] != "\n" {
+                        utf16Offset += String(chars[i]).utf16.count
                         i += 1
                     }
                     let raw = String(chars[start..<i])
-                    tokens.append(BSONToken(kind: .comment(raw), raw: raw))
+                    let range = NSRange(location: startOffset, length: utf16Offset - startOffset)
+                    tokens.append(BSONToken(kind: .comment(raw), raw: raw, range: range))
                     continue
                 } else if i + 1 < n && chars[i + 1] == "*" {
                     // Block comment
                     let start = i
+                    utf16Offset += String(chars[i]).utf16.count // for '/'
+                    utf16Offset += String(chars[i+1]).utf16.count // for '*'
                     i += 2
                     while i < n {
                         if i + 1 < n && chars[i] == "*" && chars[i + 1] == "/" {
+                            utf16Offset += String(chars[i]).utf16.count
+                            utf16Offset += String(chars[i+1]).utf16.count
                             i += 2
                             break
                         }
+                        utf16Offset += String(chars[i]).utf16.count
                         i += 1
                     }
                     let raw = String(chars[start..<i])
-                    tokens.append(BSONToken(kind: .comment(raw), raw: raw))
+                    let range = NSRange(location: startOffset, length: utf16Offset - startOffset)
+                    tokens.append(BSONToken(kind: .comment(raw), raw: raw, range: range))
                     continue
                 } else {
                     // Regex literal
                     let start = i
+                    utf16Offset += String(chars[i]).utf16.count // for '/'
                     i += 1 // skip opening '/'
                     var pattern = ""
                     var escaped = false
                     while i < n {
                         let rc = chars[i]
+                        utf16Offset += String(rc).utf16.count
                         if escaped {
                             pattern.append(rc)
                             escaped = false
@@ -166,10 +181,12 @@ enum BSONQueryParser {
                     var flags = ""
                     while i < n && (chars[i].isLetter) {
                         flags.append(chars[i])
+                        utf16Offset += String(chars[i]).utf16.count
                         i += 1
                     }
                     let raw = String(chars[start..<i])
-                    tokens.append(BSONToken(kind: .regex(pattern: pattern, flags: flags), raw: raw))
+                    let range = NSRange(location: startOffset, length: utf16Offset - startOffset)
+                    tokens.append(BSONToken(kind: .regex(pattern: pattern, flags: flags), raw: raw, range: range))
                     continue
                 }
             }
@@ -178,11 +195,13 @@ enum BSONQueryParser {
             if c == "\"" || c == "'" {
                 let quote = c
                 let start = i
+                utf16Offset += String(chars[i]).utf16.count // opening quote
                 i += 1 // skip opening quote
                 var val = ""
                 var escaped = false
                 while i < n {
                     let sc = chars[i]
+                    utf16Offset += String(sc).utf16.count
                     if escaped {
                         val.append(sc)
                         escaped = false
@@ -198,13 +217,17 @@ enum BSONQueryParser {
                     i += 1
                 }
                 let raw = String(chars[start..<i])
-                tokens.append(BSONToken(kind: .string(value: val, quote: quote), raw: raw))
+                let range = NSRange(location: startOffset, length: utf16Offset - startOffset)
+                tokens.append(BSONToken(kind: .string(value: val, quote: quote), raw: raw, range: range))
                 continue
             }
             
             // Punctuation
             if "{}[],():".contains(c) {
-                tokens.append(BSONToken(kind: .punctuation(c), raw: String(c)))
+                utf16Offset += String(c).utf16.count
+                let raw = String(c)
+                let range = NSRange(location: startOffset, length: utf16Offset - startOffset)
+                tokens.append(BSONToken(kind: .punctuation(c), raw: raw, range: range))
                 i += 1
                 continue
             }
@@ -212,29 +235,34 @@ enum BSONQueryParser {
             // Identifiers
             if c.isLetter || c == "_" || c == "$" {
                 let start = i
-                i += 1
                 while i < n && (chars[i].isLetter || chars[i].isNumber || chars[i] == "_" || chars[i] == "$") {
+                    utf16Offset += String(chars[i]).utf16.count
                     i += 1
                 }
                 let raw = String(chars[start..<i])
-                tokens.append(BSONToken(kind: .identifier(raw), raw: raw))
+                let range = NSRange(location: startOffset, length: utf16Offset - startOffset)
+                tokens.append(BSONToken(kind: .identifier(raw), raw: raw, range: range))
                 continue
             }
             
             // Numbers
             if c.isNumber || c == "-" || c == "+" || c == "." {
                 let start = i
-                i += 1
                 while i < n && (chars[i].isNumber || chars[i] == "." || chars[i].lowercased() == "e" || chars[i] == "-" || chars[i] == "+") {
+                    utf16Offset += String(chars[i]).utf16.count
                     i += 1
                 }
                 let raw = String(chars[start..<i])
-                tokens.append(BSONToken(kind: .number(raw), raw: raw))
+                let range = NSRange(location: startOffset, length: utf16Offset - startOffset)
+                tokens.append(BSONToken(kind: .number(raw), raw: raw, range: range))
                 continue
             }
             
             // Fallback
-            tokens.append(BSONToken(kind: .punctuation(c), raw: String(c)))
+            utf16Offset += String(c).utf16.count
+            let raw = String(c)
+            let range = NSRange(location: startOffset, length: utf16Offset - startOffset)
+            tokens.append(BSONToken(kind: .punctuation(c), raw: raw, range: range))
             i += 1
         }
         
