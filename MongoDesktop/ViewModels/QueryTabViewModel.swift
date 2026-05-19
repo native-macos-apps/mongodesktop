@@ -42,6 +42,7 @@ final class QueryTabViewModel: ObservableObject {
     @Published var aggregateQueryDuration: TimeInterval? = nil
     
     @Published var indexes: [BSONDocument] = []
+    @Published var indexStats: [String: (size: Int64, usage: Int64)] = [:]
     @Published var isIndexesLoading = false
     @Published var indexesError: String? = nil
 
@@ -79,6 +80,7 @@ final class QueryTabViewModel: ObservableObject {
         aggregateError = nil
         aggregateQueryDuration = nil
         indexes = []
+        indexStats = [:]
         indexesError = nil
     }
 
@@ -209,7 +211,13 @@ final class QueryTabViewModel: ObservableObject {
                 database: database,
                 collection: collection
             )
+            let stats = (try? await mongoService.getIndexStats(
+                database: database,
+                collection: collection
+            )) ?? [:]
+            
             self.indexes = results
+            self.indexStats = stats
         } catch {
             self.indexesError = error.localizedDescription
             session.lastError = error.localizedDescription

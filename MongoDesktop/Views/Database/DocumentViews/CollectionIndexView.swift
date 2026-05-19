@@ -4,6 +4,8 @@ import SwiftBSON
 struct CollectionIndexView: View {
     @EnvironmentObject private var sessionViewModel: DatabaseSessionViewModel
     @EnvironmentObject private var tabViewModel: QueryTabViewModel
+    @State private var isShowingCreateDialog = false
+    @State private var selectedIndexId: String? = nil
     
     var body: some View {
         VStack(spacing: 0) {
@@ -15,12 +17,26 @@ struct CollectionIndexView: View {
                 
                 Spacer()
                 
-                Button(action: refreshIndexes) {
-                    Label("Refresh", systemImage: "arrow.clockwise")
-                        .font(.caption.weight(.medium))
+                HStack(spacing: 8) {
+                    Button(action: refreshIndexes) {
+                        Label("Refresh", systemImage: "arrow.clockwise")
+                            .font(.caption.weight(.medium))
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+                    
+                    Button(action: {
+                        isShowingCreateDialog = true
+                    }) {
+                        Label("Create Index", systemImage: "plus")
+                            .font(.caption.weight(.semibold))
+                            .foregroundColor(.white)
+                            .padding(.horizontal, 10)
+                            .padding(.vertical, 4.5)
+                            .background(Color.accentColor, in: RoundedRectangle(cornerRadius: 6, style: .continuous))
+                    }
+                    .buttonStyle(.plain)
                 }
-                .buttonStyle(.bordered)
-                .controlSize(.small)
             }
             .padding(.horizontal, 16)
             .padding(.vertical, 10)
@@ -65,73 +81,69 @@ struct CollectionIndexView: View {
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
-                Table(indexRows) {
-                    TableColumn("Name") { row in
-                        HStack(spacing: 8) {
+                Table(indexRows, children: \.children, selection: $selectedIndexId) {
+                    TableColumn("Name and Definition") { row in
+                        if row.children != nil {
+                            // Parent row: Index Name
                             Text(row.name)
-                                .font(.body.bold())
+                                .font(.body.weight(.semibold))
                                 .foregroundColor(.primary)
-                            
-                            if row.name == "_id_" {
-                                Text("Primary")
-                                    .font(.system(size: 10, weight: .bold))
-                                    .foregroundColor(.white)
-                                    .padding(.horizontal, 5)
-                                    .padding(.vertical, 1.5)
-                                    .background(Color.blue, in: RoundedRectangle(cornerRadius: 4))
-                            }
-                        }
-                    }
-                    
-                    TableColumn("Keys") { row in
-                        Text(row.key.toCanonicalExtendedJSONString())
-                            .font(.system(.body, design: .monospaced))
-                            .foregroundColor(.secondary)
-                    }
-                    
-                    TableColumn("Unique") { row in
-                        if row.isUnique {
+                        } else {
+                            // Child row: Field path and value
                             HStack(spacing: 4) {
-                                Image(systemName: "checkmark.circle.fill")
-                                    .foregroundColor(.green)
-                                Text("Unique")
-                                    .font(.caption)
-                                    .foregroundColor(.green)
+                                Image(systemName: "key.fill")
+                                    .font(.system(size: 9))
+                                    .foregroundStyle(.secondary)
+                                Text(row.name)
+                                    .font(.system(.body, design: .monospaced))
+                                    .foregroundColor(.secondary)
+                                Text(":")
+                                    .foregroundColor(.secondary)
+                                Text(row.definition ?? "")
+                                    .font(.system(.body, design: .monospaced))
+                                    .foregroundColor(.primary)
                             }
-                        } else {
-                            Text("No")
-                                .foregroundStyle(.tertiary)
+                            .padding(.leading, 8)
                         }
                     }
                     
-                    TableColumn("Sparse") { row in
-                        if row.isSparse {
-                            HStack(spacing: 4) {
-                                Image(systemName: "checkmark.circle.fill")
-                                    .foregroundColor(.orange)
-                                Text("Sparse")
-                                    .font(.caption)
-                                    .foregroundColor(.orange)
+                    TableColumn("Type") { row in
+                        if let type = row.type {
+                            IndexBadgeView(label: type)
+                        }
+                    }
+                    
+                    TableColumn("Size") { row in
+                        if let sizeBytes = row.sizeBytes {
+                            Text(formatSize(sizeBytes) ?? "-")
+                                .font(.body.monospacedDigit())
+                        }
+                    }
+                    
+                    TableColumn("Usage") { row in
+                        if let usageCount = row.usageCount {
+                            Text("\(usageCount)")
+                                .font(.body.monospacedDigit())
+                        }
+                    }
+                    
+                    TableColumn("Properties") { row in
+                        if row.children != nil {
+                            HStack(spacing: 6) {
+                                if row.isUnique {
+                                    IndexBadgeView(label: "UNIQUE")
+                                }
+                                if row.isCompound {
+                                    IndexBadgeView(label: "COMPOUND")
+                                }
+                                if row.isSparse {
+                                    IndexBadgeView(label: "SPARSE")
+                                }
+                                if row.ttl != nil {
+                                    IndexBadgeView(label: "TTL")
+                                }
                             }
-                        } else {
-                            Text("No")
-                                .foregroundStyle(.tertiary)
                         }
-                    }
-                    
-                    TableColumn("TTL") { row in
-                        if let ttl = row.ttl {
-                            Text("\(ttl)s")
-                                .foregroundColor(.secondary)
-                        } else {
-                            Text("-")
-                                .foregroundStyle(.tertiary)
-                        }
-                    }
-                    
-                    TableColumn("Version") { row in
-                        Text("v\(row.version)")
-                            .foregroundColor(.secondary)
                     }
                 }
                 .tableStyle(.inset(alternatesRowBackgrounds: true))
@@ -140,17 +152,75 @@ struct CollectionIndexView: View {
         .onAppear {
             refreshIndexes()
         }
+        .alert("Create Index", isPresented: $isShowingCreateDialog) {
+            Button("OK", role: .cancel) { }
+        } message: {
+            Text("Index creation interface will be added in a future update.")
+        }
     }
     
     private func refreshIndexes() {
         Task { await tabViewModel.fetchIndexes(using: sessionViewModel) }
     }
     
+    private func formatSize(_ bytes: Int64) -> String? {
+        let formatter = ByteCountFormatter()
+        formatter.allowedUnits = [.useAll]
+        formatter.countStyle = .file
+        return formatter.string(fromByteCount: bytes)
+    }
+    
     private var indexRows: [IndexRow] {
         tabViewModel.indexes.enumerated().map { offset, doc in
             let name = doc["name"]?.stringValue ?? "index-\(offset)"
             let key = doc["key"]?.documentValue ?? BSONDocument()
+            
+            // Build children representing key paths
+            var children: [IndexRow] = []
+            for (keyPath, valueBson) in key {
+                let valStr: String
+                switch valueBson {
+                case .int32(let i): valStr = String(i)
+                case .int64(let i): valStr = String(i)
+                case .double(let d): valStr = String(Int(d))
+                case .string(let s): valStr = "\"\(s)\""
+                default: valStr = String(describing: valueBson)
+                }
+                children.append(IndexRow(
+                    id: "\(name)-\(keyPath)",
+                    name: keyPath,
+                    definition: valStr,
+                    type: nil,
+                    sizeBytes: nil,
+                    usageCount: nil,
+                    isUnique: false,
+                    isCompound: false,
+                    isSparse: false,
+                    ttl: nil,
+                    version: "",
+                    children: nil
+                ))
+            }
+            
+            // Determine type
+            var type = "REGULAR"
+            for (_, val) in key {
+                if let str = val.stringValue {
+                    if str == "2dsphere" || str == "2d" {
+                        type = "GEOSPATIAL"
+                        break
+                    } else if str == "text" {
+                        type = "TEXT"
+                        break
+                    } else if str == "hashed" {
+                        type = "HASHED"
+                        break
+                    }
+                }
+            }
+            
             let isUnique = doc["unique"]?.boolValue ?? false
+            let isCompound = key.count > 1
             let isSparse = doc["sparse"]?.boolValue ?? false
             let ttl = doc["expireAfterSeconds"]?.intValue
             
@@ -167,27 +237,58 @@ struct CollectionIndexView: View {
                 version = "unknown"
             }
             
+            let stats = tabViewModel.indexStats[name]
+            
             return IndexRow(
                 id: name,
                 name: name,
-                key: key,
+                definition: nil,
+                type: type,
+                sizeBytes: stats?.size,
+                usageCount: stats?.usage,
                 isUnique: isUnique,
+                isCompound: isCompound,
                 isSparse: isSparse,
                 ttl: ttl,
                 version: version,
-                rawDocument: doc
+                children: children.isEmpty ? nil : children
             )
         }
+    }
+}
+
+struct IndexBadgeView: View {
+    let label: String
+    
+    var body: some View {
+        HStack(spacing: 3) {
+            Text(label)
+                .font(.system(size: 9, weight: .bold))
+            Image(systemName: "info.circle.fill")
+                .font(.system(size: 9))
+                .opacity(0.8)
+        }
+        .foregroundColor(.white)
+        .padding(.horizontal, 6)
+        .padding(.vertical, 3)
+        .background(
+            RoundedRectangle(cornerRadius: 4, style: .continuous)
+                .fill(Color(white: 0.22))
+        )
     }
 }
 
 struct IndexRow: Identifiable {
     let id: String
     let name: String
-    let key: BSONDocument
+    let definition: String?
+    let type: String?
+    let sizeBytes: Int64?
+    let usageCount: Int64?
     let isUnique: Bool
+    let isCompound: Bool
     let isSparse: Bool
     let ttl: Int?
     let version: String
-    let rawDocument: BSONDocument
+    var children: [IndexRow]?
 }

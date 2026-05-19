@@ -337,6 +337,57 @@ actor MongoService {
         return results
     }
 
+    func getIndexStats(
+        database: String,
+        collection: String
+    ) async throws -> [String: (size: Int64, usage: Int64)] {
+        let client = try requireClient()
+        var stats: [String: (size: Int64, usage: Int64)] = [:]
+        
+        // 1. Get index sizes using collStats command
+        let collStatsCmd: BSONDocument = [
+            "collStats": .string(collection)
+        ]
+        if let reply = try? runCommand(client: client, database: database, command: collStatsCmd),
+           case .document(let indexSizes)? = reply["indexSizes"] {
+            for (key, val) in indexSizes {
+                let bytes: Int64
+                switch val {
+                case .int32(let i): bytes = Int64(i)
+                case .int64(let i): bytes = i
+                case .double(let d): bytes = Int64(d)
+                default: bytes = 0
+                }
+                stats[key] = (size: bytes, usage: 0)
+            }
+        }
+        
+        // 2. Get index usage using $indexStats aggregate stage
+        let indexStatsPipeline: [BSONDocument] = [
+            ["$indexStats": .document([:])]
+        ]
+        if let results = try? await runAggregate(database: database, collection: collection, pipeline: indexStatsPipeline) {
+            for doc in results {
+                guard let name = doc["name"]?.stringValue else { continue }
+                var usageCount: Int64 = 0
+                if let accesses = doc["accesses"]?.documentValue,
+                   let ops = accesses["ops"] {
+                    switch ops {
+                    case .int32(let i): usageCount = Int64(i)
+                    case .int64(let i): usageCount = i
+                    case .double(let d): usageCount = Int64(d)
+                    default: break
+                    }
+                }
+                let current = stats[name] ?? (size: 0, usage: 0)
+                stats[name] = (size: current.size, usage: usageCount)
+            }
+        }
+        
+        return stats
+    }
+
+
 
     private func ping(client: OpaquePointer) throws {
         var command = bson_t()
