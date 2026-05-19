@@ -8,6 +8,14 @@ enum DocumentViewMode: String, CaseIterable, Identifiable {
     var id: String { rawValue }
 }
 
+enum CollectionTab: String, CaseIterable, Identifiable {
+    case document = "Document"
+    case aggregate = "Aggregate"
+    case index = "Index"
+
+    var id: String { rawValue }
+}
+
 @MainActor
 final class QueryTabViewModel: ObservableObject {
     @Published var title = ""
@@ -25,6 +33,18 @@ final class QueryTabViewModel: ObservableObject {
     @Published var selectedRowIds: Set<String> = []
     @Published var isLoading = false
     @Published var lastQueryDuration: TimeInterval?
+
+    @Published var selectedTab: CollectionTab = .document
+    @Published var aggregatePipelineText = "[\n    {\n        \"$match\": {}\n    }\n]"
+    @Published var aggregateDocuments: [BSONDocument] = []
+    @Published var isAggregateLoading = false
+    @Published var aggregateError: String? = nil
+    @Published var aggregateQueryDuration: TimeInterval? = nil
+    
+    @Published var indexes: [BSONDocument] = []
+    @Published var isIndexesLoading = false
+    @Published var indexesError: String? = nil
+
 
     private let mongoService: MongoService
 
@@ -53,6 +73,13 @@ final class QueryTabViewModel: ObservableObject {
         hasMore = false
         currentPage = 0
         lastQueryDuration = nil
+        
+        selectedTab = .document
+        aggregateDocuments = []
+        aggregateError = nil
+        aggregateQueryDuration = nil
+        indexes = []
+        indexesError = nil
     }
 
     func resetPaging() {
@@ -137,5 +164,85 @@ final class QueryTabViewModel: ObservableObject {
         }
         let converted = BSONQueryParser.convertBSONToJSON(trimmed)
         return try BSONDocument(fromJSON: converted)
+    }
+
+    func runAggregate(using session: DatabaseSessionViewModel) async {
+        guard let database = databaseName ?? session.selectedDatabase,
+              let collection = collectionName ?? session.selectedCollection else {
+            return
+        }
+        
+        isAggregateLoading = true
+        aggregateError = nil
+        aggregateQueryDuration = nil
+        
+        let start = Date()
+        
+        do {
+            let pipeline = try parsePipeline(aggregatePipelineText)
+            let results = try await mongoService.runAggregate(
+                database: database,
+                collection: collection,
+                pipeline: pipeline
+            )
+            self.aggregateDocuments = results
+            self.aggregateQueryDuration = Date().timeIntervalSince(start)
+        } catch {
+            self.aggregateError = error.localizedDescription
+            session.lastError = error.localizedDescription
+        }
+        
+        isAggregateLoading = false
+    }
+    
+    func fetchIndexes(using session: DatabaseSessionViewModel) async {
+        guard let database = databaseName ?? session.selectedDatabase,
+              let collection = collectionName ?? session.selectedCollection else {
+            return
+        }
+        
+        isIndexesLoading = true
+        indexesError = nil
+        
+        do {
+            let results = try await mongoService.listIndexes(
+                database: database,
+                collection: collection
+            )
+            self.indexes = results
+        } catch {
+            self.indexesError = error.localizedDescription
+            session.lastError = error.localizedDescription
+        }
+        
+        isIndexesLoading = false
+    }
+    
+    private func parsePipeline(_ text: String) throws -> [BSONDocument] {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmed.isEmpty || trimmed == "[]" {
+            return []
+        }
+        
+        let converted = BSONQueryParser.convertBSONToJSON(trimmed)
+        
+        guard let data = converted.data(using: .utf8) else {
+            throw MongoServiceError.bsonError("Invalid encoding in pipeline text.")
+        }
+        
+        let jsonObject = try JSONSerialization.jsonObject(with: data, options: [])
+        guard let jsonArray = jsonObject as? [[String: Any]] else {
+            throw MongoServiceError.bsonError("Pipeline must be a JSON Array of objects.")
+        }
+        
+        var pipelineDocs: [BSONDocument] = []
+        for obj in jsonArray {
+            let objData = try JSONSerialization.data(withJSONObject: obj, options: [])
+            let jsonString = String(data: objData, encoding: .utf8) ?? "{}"
+            let doc = try BSONDocument(fromJSON: jsonString)
+            pipelineDocs.append(doc)
+        }
+        
+        return pipelineDocs
     }
 }

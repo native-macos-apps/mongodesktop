@@ -43,3 +43,31 @@ func displayValue(_ value: BSON?, timeZone: TimeZone) -> String {
         return String(describing: value)
     }
 }
+
+extension BSON {
+    var stringValue: String? {
+        if case .string(let s) = self { return s }
+        return nil
+    }
+    var boolValue: Bool? {
+        if case .bool(let b) = self { return b }
+        return nil
+    }
+    var intValue: Int? {
+        switch self {
+        case .int32(let i): return Int(i)
+        case .int64(let i): return Int(i)
+        case .double(let d): return Int(d)
+        default: return nil
+        }
+    }
+    var doubleValue: Double? {
+        if case .double(let d) = self { return d }
+        return nil
+    }
+    var documentValue: BSONDocument? {
+        if case .document(let d) = self { return d }
+        return nil
+    }
+}
+

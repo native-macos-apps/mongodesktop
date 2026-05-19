@@ -282,6 +282,62 @@ actor MongoService {
         return documents
     }
 
+    func runAggregate(
+        database: String,
+        collection: String,
+        pipeline: [BSONDocument]
+    ) async throws -> [BSONDocument] {
+        let client = try requireClient()
+        var command: BSONDocument = [
+            "aggregate": .string(collection),
+            "cursor": .document([:])
+        ]
+        
+        let bsonPipeline = pipeline.map { BSON.document($0) }
+        command["pipeline"] = .array(bsonPipeline)
+        
+        let reply = try runCommand(client: client, database: database, command: command)
+        
+        guard case .document(let cursor)? = reply["cursor"],
+              case .array(let batch)? = cursor["firstBatch"] else {
+            throw MongoServiceError.commandFailed("Unable to read aggregate cursor.")
+        }
+        
+        var results: [BSONDocument] = []
+        for item in batch {
+            if case .document(let doc) = item {
+                results.append(doc)
+            }
+        }
+        return results
+    }
+
+    func listIndexes(
+        database: String,
+        collection: String
+    ) async throws -> [BSONDocument] {
+        let client = try requireClient()
+        let command: BSONDocument = [
+            "listIndexes": .string(collection)
+        ]
+        
+        let reply = try runCommand(client: client, database: database, command: command)
+        
+        guard case .document(let cursor)? = reply["cursor"],
+              case .array(let batch)? = cursor["firstBatch"] else {
+            throw MongoServiceError.commandFailed("Unable to read indexes.")
+        }
+        
+        var results: [BSONDocument] = []
+        for item in batch {
+            if case .document(let doc) = item {
+                results.append(doc)
+            }
+        }
+        return results
+    }
+
+
     private func ping(client: OpaquePointer) throws {
         var command = bson_t()
         bson_init(&command)
