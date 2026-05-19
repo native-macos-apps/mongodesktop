@@ -14,6 +14,21 @@ struct JSONTreeView: View {
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
+        .contextMenu {
+            Button {
+                NSPasteboard.general.clearContents()
+                NSPasteboard.general.setString(self.document.toCanonicalExtendedJSONString(), forType: .string)
+            } label: {
+                Label("Copy (BSON)", systemImage: "doc.on.doc")
+            }
+            
+            Button {
+                NSPasteboard.general.clearContents()
+                NSPasteboard.general.setString(self.document.toRelaxedExtendedJSONString(), forType: .string)
+            } label: {
+                Label("Copy JSON", systemImage: "curlybraces")
+            }
+        }
     }
 
     private var nodes: [JSONNode] {

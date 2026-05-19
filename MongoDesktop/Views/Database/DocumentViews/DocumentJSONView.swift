@@ -77,5 +77,20 @@ struct JSONDocumentCard: View {
             RoundedRectangle(cornerRadius: 10, style: .continuous)
                 .stroke(Color.primary.opacity(0.07), lineWidth: 1)
         )
+        .contextMenu {
+            Button {
+                NSPasteboard.general.clearContents()
+                NSPasteboard.general.setString(self.document.toCanonicalExtendedJSONString(), forType: .string)
+            } label: {
+                Label("Copy (BSON)", systemImage: "doc.on.doc")
+            }
+            
+            Button {
+                NSPasteboard.general.clearContents()
+                NSPasteboard.general.setString(self.document.toRelaxedExtendedJSONString(), forType: .string)
+            } label: {
+                Label("Copy JSON", systemImage: "curlybraces")
+            }
+        }
     }
 }

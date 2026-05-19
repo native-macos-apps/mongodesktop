@@ -111,6 +111,22 @@ struct DocumentTableView: View {
                     } label: {
                         Label("View Document Detail", systemImage: "doc.text.magnifyingglass")
                     }
+                    
+                    Divider()
+                    
+                    Button {
+                        NSPasteboard.general.clearContents()
+                        NSPasteboard.general.setString(row.document.toCanonicalExtendedJSONString(), forType: .string)
+                    } label: {
+                        Label("Copy (BSON)", systemImage: "doc.on.doc")
+                    }
+                    
+                    Button {
+                        NSPasteboard.general.clearContents()
+                        NSPasteboard.general.setString(row.document.toRelaxedExtendedJSONString(), forType: .string)
+                    } label: {
+                        Label("Copy JSON", systemImage: "curlybraces")
+                    }
                 }
             }
             .id(columns)

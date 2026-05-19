@@ -71,3 +71,22 @@ extension BSON {
     }
 }
 
+extension BSONDocument {
+    func toRelaxedExtendedJSONString() -> String {
+        // SwiftBSON has ExtendedJSONEncoder which compiles to standard MongoDB Extended JSON
+        if let encoder = try? ExtendedJSONEncoder(),
+           let data = try? encoder.encode(self),
+           let str = String(data: data, encoding: .utf8) {
+            return str
+        }
+        // Fallback to standard JSONEncoder
+        let stdEncoder = JSONEncoder()
+        stdEncoder.outputFormatting = .prettyPrinted
+        if let data = try? stdEncoder.encode(self),
+           let str = String(data: data, encoding: .utf8) {
+            return str
+        }
+        return "{}"
+    }
+}
+
