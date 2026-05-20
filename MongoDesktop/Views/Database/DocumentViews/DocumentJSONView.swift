@@ -4,12 +4,11 @@ import SwiftBSON
 // MARK: - DocumentJSONView
 
 struct DocumentJSONView: View {
-    let documents: [BSONDocument]
-    let timeZone: TimeZone
+    let wrappedDocuments: [JSONDocumentWrapper]
     let isLoading: Bool
 
     var body: some View {
-        if isLoading && documents.isEmpty {
+        if isLoading && wrappedDocuments.isEmpty {
             VStack(spacing: 12) {
                 ProgressView()
                     .controlSize(.regular)
@@ -17,7 +16,7 @@ struct DocumentJSONView: View {
                     .foregroundStyle(.secondary)
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
-        } else if documents.isEmpty {
+        } else if wrappedDocuments.isEmpty {
             VStack {
                 ContentUnavailableView(
                     "No documents",
@@ -30,8 +29,8 @@ struct DocumentJSONView: View {
         } else {
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 10) {
-                    ForEach(Array(documents.enumerated()), id: \.offset) { index, doc in
-                        JSONDocumentCard(index: index, document: doc, timeZone: timeZone)
+                    ForEach(wrappedDocuments) { wrapper in
+                        JSONDocumentCard(wrapper: wrapper)
                     }
                 }
                 .padding(16)
@@ -53,20 +52,14 @@ struct DocumentJSONView: View {
 // MARK: - JSONDocumentCard
 
 struct JSONDocumentCard: View {
-    let index: Int
-    let document: BSONDocument
-    let timeZone: TimeZone
-
-    private var nodes: [JSONNode] {
-        document.map { JSONNode(key: $0.key, value: $0.value, timeZone: timeZone) }
-    }
+    let wrapper: JSONDocumentWrapper
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             Divider().opacity(0.4)
 
             VStack(alignment: .leading, spacing: 3) {
-                ForEach(nodes) { node in
+                ForEach(wrapper.nodes) { node in
                     JSONNodeView(node: node, depth: 0)
                 }
             }
@@ -80,14 +73,14 @@ struct JSONDocumentCard: View {
         .contextMenu {
             Button {
                 NSPasteboard.general.clearContents()
-                NSPasteboard.general.setString(self.document.toCanonicalExtendedJSONString(), forType: .string)
+                NSPasteboard.general.setString(self.wrapper.document.toCanonicalExtendedJSONString(), forType: .string)
             } label: {
                 Label("Copy (BSON)", systemImage: "doc.on.doc")
             }
             
             Button {
                 NSPasteboard.general.clearContents()
-                NSPasteboard.general.setString(self.document.toRelaxedExtendedJSONString(), forType: .string)
+                NSPasteboard.general.setString(self.wrapper.document.toRelaxedExtendedJSONString(), forType: .string)
             } label: {
                 Label("Copy JSON", systemImage: "curlybraces")
             }

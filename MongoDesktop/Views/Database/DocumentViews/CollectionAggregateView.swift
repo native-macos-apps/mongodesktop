@@ -116,18 +116,23 @@ struct CollectionAggregateView: View {
                     }
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
                 } else {
-                    if localViewMode == .table {
+                    ZStack {
                         DocumentTableView(
-                            documents: tabViewModel.aggregateDocuments,
+                            rows: tabViewModel.aggregateTableCache.rows,
+                            columns: tabViewModel.aggregateTableCache.columns,
+                            columnTypes: tabViewModel.aggregateTableCache.columnTypes,
                             selection: $selection,
                             isLoading: false
                         )
-                    } else {
+                        .opacity(localViewMode == .table ? 1 : 0)
+                        .disabled(localViewMode != .table)
+                        
                         DocumentJSONView(
-                            documents: tabViewModel.aggregateDocuments,
-                            timeZone: globalSettings.displayTimeZone,
+                            wrappedDocuments: tabViewModel.getAggregateJSONCache(timeZone: globalSettings.displayTimeZone),
                             isLoading: false
                         )
+                        .opacity(localViewMode == .json ? 1 : 0)
+                        .disabled(localViewMode != .json)
                     }
                 }
             }

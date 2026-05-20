@@ -195,12 +195,23 @@ struct CollectionDocumentView: View {
     // MARK: - Content Area
 
     private var contentArea: some View {
-        Group {
-            if localViewMode == .table {
-                DocumentTableView(documents: tabViewModel.documents, selection: $tabViewModel.selectedRowIds, isLoading: tabViewModel.isLoading)
-            } else {
-                DocumentJSONView(documents: tabViewModel.documents, timeZone: globalSettings.displayTimeZone, isLoading: tabViewModel.isLoading)
-            }
+        ZStack {
+            DocumentTableView(
+                rows: tabViewModel.documentTableCache.rows,
+                columns: tabViewModel.documentTableCache.columns,
+                columnTypes: tabViewModel.documentTableCache.columnTypes,
+                selection: $tabViewModel.selectedRowIds,
+                isLoading: tabViewModel.isLoading
+            )
+            .opacity(localViewMode == .table ? 1 : 0)
+            .disabled(localViewMode != .table)
+            
+            DocumentJSONView(
+                wrappedDocuments: tabViewModel.getDocumentJSONCache(timeZone: globalSettings.displayTimeZone),
+                isLoading: tabViewModel.isLoading
+            )
+            .opacity(localViewMode == .json ? 1 : 0)
+            .disabled(localViewMode != .json)
         }
     }
 

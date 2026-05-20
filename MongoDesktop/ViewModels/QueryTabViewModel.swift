@@ -29,14 +29,24 @@ final class QueryTabViewModel: ObservableObject {
     @Published var pageSize = 100
     @Published var currentPage = 0
     @Published var hasMore = false
-    @Published var documents: [BSONDocument] = []
+    @Published var documents: [BSONDocument] = [] {
+        didSet {
+            documentTableCache = TableDataCache(documents: documents)
+            documentJSONCache = nil
+        }
+    }
     @Published var selectedRowIds: Set<String> = []
     @Published var isLoading = false
     @Published var lastQueryDuration: TimeInterval?
 
     @Published var selectedTab: CollectionTab = .document
     @Published var aggregatePipelineText = "[\n    {\n        \"$match\": {}\n    }\n]"
-    @Published var aggregateDocuments: [BSONDocument] = []
+    @Published var aggregateDocuments: [BSONDocument] = [] {
+        didSet {
+            aggregateTableCache = TableDataCache(documents: aggregateDocuments)
+            aggregateJSONCache = nil
+        }
+    }
     @Published var isAggregateLoading = false
     @Published var aggregateError: String? = nil
     @Published var aggregateQueryDuration: TimeInterval? = nil
@@ -45,6 +55,54 @@ final class QueryTabViewModel: ObservableObject {
     @Published var indexStats: [String: (size: Int64, usage: Int64)] = [:]
     @Published var isIndexesLoading = false
     @Published var indexesError: String? = nil
+
+    // MARK: - Caching for Performance
+    @Published var documentTableCache = TableDataCache(documents: [])
+    @Published var aggregateTableCache = TableDataCache(documents: [])
+
+    private var documentJSONCache: [JSONDocumentWrapper]? = nil
+    private var documentJSONTimeZone: TimeZone? = nil
+    
+    private var aggregateJSONCache: [JSONDocumentWrapper]? = nil
+    private var aggregateJSONTimeZone: TimeZone? = nil
+
+    func getDocumentJSONCache(timeZone: TimeZone) -> [JSONDocumentWrapper] {
+        if let cache = documentJSONCache, documentJSONTimeZone == timeZone {
+            return cache
+        }
+        let cache = documents.enumerated().map { index, doc in
+            let id: String
+            if let rawId = doc["_id"] {
+                id = "id-\(String(describing: rawId))"
+            } else {
+                id = "idx-\(index)"
+            }
+            let nodes = doc.map { JSONNode(key: $0.key, value: $0.value, timeZone: timeZone) }
+            return JSONDocumentWrapper(id: id, index: index, document: doc, nodes: nodes)
+        }
+        self.documentJSONCache = cache
+        self.documentJSONTimeZone = timeZone
+        return cache
+    }
+
+    func getAggregateJSONCache(timeZone: TimeZone) -> [JSONDocumentWrapper] {
+        if let cache = aggregateJSONCache, aggregateJSONTimeZone == timeZone {
+            return cache
+        }
+        let cache = aggregateDocuments.enumerated().map { index, doc in
+            let id: String
+            if let rawId = doc["_id"] {
+                id = "id-\(String(describing: rawId))"
+            } else {
+                id = "idx-\(index)"
+            }
+            let nodes = doc.map { JSONNode(key: $0.key, value: $0.value, timeZone: timeZone) }
+            return JSONDocumentWrapper(id: id, index: index, document: doc, nodes: nodes)
+        }
+        self.aggregateJSONCache = cache
+        self.aggregateJSONTimeZone = timeZone
+        return cache
+    }
 
 
     private let mongoService: MongoService
@@ -254,3 +312,86 @@ final class QueryTabViewModel: ObservableObject {
         return pipelineDocs
     }
 }
+
+// MARK: - TableDataCache
+
+struct TableDataCache {
+    let rows: [DocumentRow]
+    let columns: [String]
+    let columnTypes: [String: String]
+    
+    init(documents: [BSONDocument]) {
+        self.rows = documents.enumerated().map { index, doc in
+            DocumentRow(document: doc, fallbackIndex: index)
+        }
+        
+        var keys = Set<String>()
+        for row in rows {
+            for pair in row.document {
+                keys.insert(pair.key)
+            }
+        }
+        
+        if keys.isEmpty {
+            self.columns = []
+            self.columnTypes = [:]
+            return
+        }
+        
+        self.columns = keys.sorted { lhs, rhs in
+            if lhs == "_id" { return true }
+            if rhs == "_id" { return false }
+            return lhs.localizedStandardCompare(rhs) == .orderedAscending
+        }
+        
+        var types: [String: String] = [:]
+        for key in columns {
+            var observedTypes = Set<String>()
+            for row in rows {
+                if let value = row.document[key] {
+                    observedTypes.insert(Self.typeName(for: value))
+                }
+            }
+            if observedTypes.isEmpty {
+                types[key] = "Unknown"
+            } else if observedTypes.count == 1 {
+                types[key] = observedTypes.first!
+            } else {
+                types[key] = "Mixed"
+            }
+        }
+        self.columnTypes = types
+    }
+    
+    private static func typeName(for value: BSON) -> String {
+        switch value {
+        case .double: return "Double"
+        case .string: return "String"
+        case .document: return "Object"
+        case .array: return "Array"
+        case .binary: return "Binary"
+        case .objectID: return "ObjectId"
+        case .bool: return "Bool"
+        case .datetime: return "Date"
+        case .null: return "Null"
+        case .regex: return "Regex"
+        case .int32: return "Int32"
+        case .timestamp: return "Timestamp"
+        case .int64: return "Int64"
+        case .decimal128: return "Decimal"
+        case .maxKey: return "MaxKey"
+        case .minKey: return "MinKey"
+        default: return "Unknown"
+        }
+    }
+}
+
+// MARK: - JSONDocumentWrapper
+
+struct JSONDocumentWrapper: Identifiable {
+    let id: String
+    let index: Int
+    let document: BSONDocument
+    let nodes: [JSONNode]
+}
+
