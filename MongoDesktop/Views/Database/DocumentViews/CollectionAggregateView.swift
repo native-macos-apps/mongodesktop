@@ -4,6 +4,7 @@ import SwiftBSON
 struct CollectionAggregateView: View {
     @EnvironmentObject private var sessionViewModel: DatabaseSessionViewModel
     @EnvironmentObject private var aggregateVM: AggregateQueryViewModel
+    @EnvironmentObject private var findVM: DocumentQueryViewModel
     @EnvironmentObject private var globalSettings: GlobalSettings
     @State private var pipelineError: String? = nil
     @State private var localViewMode: DocumentViewMode = .json
@@ -58,6 +59,7 @@ struct CollectionAggregateView: View {
                 JSONEditorView(
                     text: $aggregateVM.pipelineText,
                     errorMessage: $pipelineError,
+                    documentKeys: findVM.documentTableCache.columns,
                     minHeight: 80
                 )
                 .frame(maxWidth: .infinity)

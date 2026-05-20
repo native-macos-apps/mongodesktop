@@ -10,6 +10,7 @@ import TreeSitterJSON
 struct JSONEditorView: NSViewRepresentable {
     @Binding var text: String
     @Binding var errorMessage: String?
+    var documentKeys: [String] = []
 
     var minHeight: CGFloat = 72
 
@@ -51,6 +52,7 @@ struct JSONEditorView: NSViewRepresentable {
     func updateNSView(_ nsView: NSScrollView, context: Context) {
         guard let textView = nsView.documentView as? JSONTextView else { return }
         context.coordinator.parent = self
+        context.coordinator.documentKeys = documentKeys
         if textView.string != text {
             context.coordinator.isUpdating = true
             textView.string = text
@@ -93,6 +95,15 @@ struct JSONEditorView: NSViewRepresentable {
 
             applyHighlight(in: textView)
             scheduleValidation(in: textView)
+            
+            if let event = NSApp.currentEvent, event.type == .keyDown {
+                let chars = event.characters ?? ""
+                if let first = chars.first, (first.isLetter || first == "$") {
+                    DispatchQueue.main.async {
+                        textView.complete(nil)
+                    }
+                }
+            }
         }
 
         func textView(_ textView: NSTextView, shouldChangeTextIn affectedCharRange: NSRange, replacementString: String?) -> Bool {
@@ -187,6 +198,48 @@ struct JSONEditorView: NSViewRepresentable {
             textStorage.replaceCharacters(in: range, with: replacement)
             textView.setSelectedRange(NSRange(location: cursorLocation, length: 0))
             textView.didChangeText()
+        }
+
+        var documentKeys: [String] = []
+        private let mongoKeywords = [
+            "$eq", "$gt", "$gte", "$in", "$lt", "$lte", "$ne", "$nin",
+            "$and", "$not", "$nor", "$or",
+            "$exists", "$type",
+            "$expr", "$jsonSchema", "$mod", "$regex", "$text", "$where",
+            "$all", "$elemMatch", "$size",
+            "$bitsAllClear", "$bitsAllSet", "$bitsAnyClear", "$bitsAnySet",
+            "$match", "$group", "$project", "$sort", "$limit", "$skip", "$unwind", "$lookup", "$addFields", "$out", "$merge", "$set", "$unset", "$push", "$pull", "$inc", "$mul"
+        ]
+        private let mongoValueHelpers = [
+            "ObjectId", "ISODate", "NumberInt", "NumberLong", "NumberDecimal",
+            "BinData", "Timestamp", "MinKey", "MaxKey", "RegExp"
+        ]
+
+        func textView(_ textView: NSTextView, completions words: [String], forPartialWordRange charRange: NSRange, indexOfSelectedItem index: UnsafeMutablePointer<Int>?) -> [String] {
+            let partialWord = (textView.string as NSString).substring(with: charRange)
+            guard !partialWord.isEmpty else { return [] }
+            
+            var allCompletions = Set<String>()
+            
+            for kw in mongoKeywords {
+                if kw.lowercased().hasPrefix(partialWord.lowercased()) {
+                    allCompletions.insert(kw)
+                }
+            }
+            
+            for helper in mongoValueHelpers {
+                if helper.lowercased().hasPrefix(partialWord.lowercased()) {
+                    allCompletions.insert(helper)
+                }
+            }
+            
+            for key in documentKeys {
+                if key.lowercased().hasPrefix(partialWord.lowercased()) {
+                    allCompletions.insert(key)
+                }
+            }
+            
+            return Array(allCompletions).sorted()
         }
     }
 }

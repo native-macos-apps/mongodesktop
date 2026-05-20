@@ -225,6 +225,7 @@
 				COPY_PHASE_STRIP = NO;
 				DEAD_CODE_STRIPPING = YES;
 				DEBUG_INFORMATION_FORMAT = dwarf;
+				EXCLUDED_ARCHS = x86_64;
 				DEVELOPMENT_TEAM = A5367HLPFW;
 				ENABLE_STRICT_OBJC_MSGSEND = YES;
 				ENABLE_TESTABILITY = YES;
@@ -291,6 +292,8 @@
 				COPY_PHASE_STRIP = NO;
 				DEAD_CODE_STRIPPING = YES;
 				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
+				ONLY_ACTIVE_ARCH = YES;
+				EXCLUDED_ARCHS = x86_64;
 				DEVELOPMENT_TEAM = A5367HLPFW;
 				ENABLE_NS_ASSERTIONS = NO;
 				ENABLE_STRICT_OBJC_MSGSEND = YES;
@@ -316,6 +319,9 @@
 		5C3182D92DBFF007004C59B0 /* Debug */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
+				ARCHS = "$(ARCHS_STANDARD)";
+				EXCLUDED_ARCHS = x86_64;
+				ONLY_ACTIVE_ARCH = YES;
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CODE_SIGN_ENTITLEMENTS = MongoDesktop/MongoDesktop.entitlements;
@@ -337,8 +343,8 @@
 					"/opt/homebrew/opt/mongo-c-driver/include/bson-2.2.4",
 				);
 				"HEADER_SEARCH_PATHS[arch=x86_64]" = (
-					"/usr/local/opt/mongo-c-driver/include/mongoc-2.2.4",
-					"/usr/local/opt/mongo-c-driver/include/bson-2.2.4",
+					"/opt/homebrew/opt/mongo-c-driver/include/mongoc-2.2.4",
+					"/opt/homebrew/opt/mongo-c-driver/include/bson-2.2.4",
 				);
 				INFOPLIST_KEY_CFBundleDisplayName = "Mongo Desktop";
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.developer-tools";
@@ -349,7 +355,7 @@
 				);
 				LIBRARY_SEARCH_PATHS = "$(inherited)";
 				"LIBRARY_SEARCH_PATHS[arch=arm64]" = "/opt/homebrew/opt/mongo-c-driver/lib";
-				"LIBRARY_SEARCH_PATHS[arch=x86_64]" = "/usr/local/opt/mongo-c-driver/lib";
+				"LIBRARY_SEARCH_PATHS[arch=x86_64]" = "/opt/homebrew/opt/mongo-c-driver/lib";
 				MACOSX_DEPLOYMENT_TARGET = 26.0;
 				MARKETING_VERSION = 1.0;
 				OTHER_LDFLAGS = (
@@ -369,6 +375,9 @@
 		5C3182DA2DBFF007004C59B0 /* Release */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
+				ARCHS = "$(ARCHS_STANDARD)";
+				EXCLUDED_ARCHS = x86_64;
+				ONLY_ACTIVE_ARCH = YES;
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CODE_SIGN_ENTITLEMENTS = MongoDesktop/MongoDesktop.entitlements;
@@ -390,8 +399,8 @@
 					"/opt/homebrew/opt/mongo-c-driver/include/bson-2.2.4",
 				);
 				"HEADER_SEARCH_PATHS[arch=x86_64]" = (
-					"/usr/local/opt/mongo-c-driver/include/mongoc-2.2.4",
-					"/usr/local/opt/mongo-c-driver/include/bson-2.2.4",
+					"/opt/homebrew/opt/mongo-c-driver/include/mongoc-2.2.4",
+					"/opt/homebrew/opt/mongo-c-driver/include/bson-2.2.4",
 				);
 				INFOPLIST_KEY_CFBundleDisplayName = "Mongo Desktop";
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.developer-tools";
@@ -402,7 +411,7 @@
 				);
 				LIBRARY_SEARCH_PATHS = "$(inherited)";
 				"LIBRARY_SEARCH_PATHS[arch=arm64]" = "/opt/homebrew/opt/mongo-c-driver/lib";
-				"LIBRARY_SEARCH_PATHS[arch=x86_64]" = "/usr/local/opt/mongo-c-driver/lib";
+				"LIBRARY_SEARCH_PATHS[arch=x86_64]" = "/opt/homebrew/opt/mongo-c-driver/lib";
 				MACOSX_DEPLOYMENT_TARGET = 26.0;
 				MARKETING_VERSION = 1.0;
 				OTHER_LDFLAGS = (

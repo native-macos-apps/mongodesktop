@@ -45,6 +45,7 @@ struct CollectionDocumentView: View {
                 JSONEditorView(
                     text: $findVM.filterText,
                     errorMessage: $filterError,
+                    documentKeys: findVM.documentTableCache.columns,
                     minHeight: 28
                 )
                 .frame(maxWidth: .infinity)
@@ -104,6 +105,7 @@ struct CollectionDocumentView: View {
             JSONEditorView(
                 text: $findVM.sortText,
                 errorMessage: $sortError,
+                documentKeys: findVM.documentTableCache.columns,
                 minHeight: 28
             )
             .frame(maxWidth: .infinity)
@@ -122,6 +124,7 @@ struct CollectionDocumentView: View {
             JSONEditorView(
                 text: $findVM.projectionText,
                 errorMessage: $projectionError,
+                documentKeys: findVM.documentTableCache.columns,
                 minHeight: 28
             )
             .frame(maxWidth: .infinity)
