@@ -288,17 +288,43 @@ actor MongoService {
         pipeline: [BSONDocument]
     ) async throws -> [BSONDocument] {
         let client = try requireClient()
-        var command: BSONDocument = [
-            "aggregate": .string(collection),
-            "cursor": .document([:])
-        ]
         
-        let bsonPipeline = pipeline.map { BSON.document($0) }
-        command["pipeline"] = .array(bsonPipeline)
+        var command = bson_t()
+        bson_init(&command)
         
-        let reply = try runCommand(client: client, database: database, command: command)
+        bson_append_utf8(&command, "aggregate", -1, collection, -1)
         
-        guard case .document(let cursor)? = reply["cursor"],
+        var pipelineArray = bson_t()
+        bson_append_array_begin(&command, "pipeline", -1, &pipelineArray)
+        for (index, doc) in pipeline.enumerated() {
+            let json = doc.toCanonicalExtendedJSONString()
+            let docBson = try bsonFromJSON(json)
+            bson_append_document(&pipelineArray, String(index), -1, docBson)
+            bson_destroy(docBson)
+        }
+        bson_append_array_end(&command, &pipelineArray)
+        
+        var cursorDoc = bson_t()
+        bson_append_document_begin(&command, "cursor", -1, &cursorDoc)
+        bson_append_document_end(&command, &cursorDoc)
+        
+        var reply = bson_t()
+        bson_init(&reply)
+        var error = bson_error_t()
+        
+        let ok = mongoc_client_command_simple(client, database, &command, nil, &reply, &error)
+        bson_destroy(&command)
+        
+        guard ok else {
+            bson_destroy(&reply)
+            throw MongoServiceError.commandFailed(errorMessage(error))
+        }
+        
+        let replyJSON = bsonToCanonicalJSON(&reply)
+        bson_destroy(&reply)
+        let replyDoc = try BSONDocument(fromJSON: replyJSON)
+        
+        guard case .document(let cursor)? = replyDoc["cursor"],
               case .array(let batch)? = cursor["firstBatch"] else {
             throw MongoServiceError.commandFailed("Unable to read aggregate cursor.")
         }
