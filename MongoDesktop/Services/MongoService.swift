@@ -231,8 +231,7 @@ actor MongoService {
         }
         defer { mongoc_collection_destroy(coll) }
 
-        let filterJSON = filter.toCanonicalExtendedJSONString()
-        let filterBson = try bsonFromJSON(filterJSON)
+        let filterBson = try bsonFromDocument(filter)
         defer { bson_destroy(filterBson) }
 
         var opts = bson_t()
@@ -243,13 +242,11 @@ actor MongoService {
         var sortBson: UnsafeMutablePointer<bson_t>?
         var projectionBson: UnsafeMutablePointer<bson_t>?
         if let sort, !sort.isEmpty {
-            let json = sort.toCanonicalExtendedJSONString()
-            sortBson = try bsonFromJSON(json)
+            sortBson = try bsonFromDocument(sort)
             bson_append_document(&opts, "sort", -1, sortBson)
         }
         if let projection, !projection.isEmpty {
-            let json = projection.toCanonicalExtendedJSONString()
-            projectionBson = try bsonFromJSON(json)
+            projectionBson = try bsonFromDocument(projection)
             bson_append_document(&opts, "projection", -1, projectionBson)
         }
         defer {
@@ -267,8 +264,7 @@ actor MongoService {
         var docPtr: UnsafePointer<bson_t>?
         while mongoc_cursor_next(cursor, &docPtr) {
             if let docPtr {
-                let json = bsonToCanonicalJSON(docPtr)
-                if let doc = try? BSONDocument(fromJSON: json) {
+                if let doc = try? documentFromBson(docPtr) {
                     documents.append(doc)
                 }
             }
@@ -288,43 +284,17 @@ actor MongoService {
         pipeline: [BSONDocument]
     ) async throws -> [BSONDocument] {
         let client = try requireClient()
+        var command: BSONDocument = [
+            "aggregate": .string(collection),
+            "cursor": .document([:])
+        ]
         
-        var command = bson_t()
-        bson_init(&command)
+        let bsonPipeline = pipeline.map { BSON.document($0) }
+        command["pipeline"] = .array(bsonPipeline)
         
-        bson_append_utf8(&command, "aggregate", -1, collection, -1)
+        let reply = try runCommand(client: client, database: database, command: command)
         
-        var pipelineArray = bson_t()
-        bson_append_array_begin(&command, "pipeline", -1, &pipelineArray)
-        for (index, doc) in pipeline.enumerated() {
-            let json = doc.toCanonicalExtendedJSONString()
-            let docBson = try bsonFromJSON(json)
-            bson_append_document(&pipelineArray, String(index), -1, docBson)
-            bson_destroy(docBson)
-        }
-        bson_append_array_end(&command, &pipelineArray)
-        
-        var cursorDoc = bson_t()
-        bson_append_document_begin(&command, "cursor", -1, &cursorDoc)
-        bson_append_document_end(&command, &cursorDoc)
-        
-        var reply = bson_t()
-        bson_init(&reply)
-        var error = bson_error_t()
-        
-        let ok = mongoc_client_command_simple(client, database, &command, nil, &reply, &error)
-        bson_destroy(&command)
-        
-        guard ok else {
-            bson_destroy(&reply)
-            throw MongoServiceError.commandFailed(errorMessage(error))
-        }
-        
-        let replyJSON = bsonToCanonicalJSON(&reply)
-        bson_destroy(&reply)
-        let replyDoc = try BSONDocument(fromJSON: replyJSON)
-        
-        guard case .document(let cursor)? = replyDoc["cursor"],
+        guard case .document(let cursor)? = reply["cursor"],
               case .array(let batch)? = cursor["firstBatch"] else {
             throw MongoServiceError.commandFailed("Unable to read aggregate cursor.")
         }
@@ -434,8 +404,7 @@ actor MongoService {
     }
 
     private func runCommand(client: OpaquePointer, database: String, command: BSONDocument) throws -> BSONDocument {
-        let json = command.toCanonicalExtendedJSONString()
-        let commandBson = try bsonFromJSON(json)
+        let commandBson = try bsonFromDocument(command)
         defer { bson_destroy(commandBson) }
 
         var reply = bson_t()
@@ -448,9 +417,9 @@ actor MongoService {
             throw MongoServiceError.commandFailed(errorMessage(error))
         }
 
-        let replyJSON = bsonToCanonicalJSON(&reply)
+        let replyDoc = try documentFromBson(&reply)
         bson_destroy(&reply)
-        return try BSONDocument(fromJSON: replyJSON)
+        return replyDoc
     }
 
     private func requireClient() throws -> OpaquePointer {
@@ -476,23 +445,25 @@ actor MongoService {
         return client
     }
 
-    private func bsonFromJSON(_ json: String) throws -> UnsafeMutablePointer<bson_t> {
-        var error = bson_error_t()
-        let result = json.withCString { ptr in
-            bson_new_from_json(ptr, -1, &error)
+    private func bsonFromDocument(_ doc: BSONDocument) throws -> UnsafeMutablePointer<bson_t> {
+        let data = doc.toData()
+        let bsonPtr = data.withUnsafeBytes { rawBuffer -> UnsafeMutablePointer<bson_t>? in
+            guard let baseAddress = rawBuffer.baseAddress else { return nil }
+            return bson_new_from_data(baseAddress.assumingMemoryBound(to: UInt8.self), data.count)
         }
-        guard let bson = result else {
-            throw MongoServiceError.bsonError(errorMessage(error))
+        guard let bson = bsonPtr else {
+            throw MongoServiceError.bsonError("Failed to initialize bson_t from data.")
         }
         return bson
     }
 
-    private func bsonToCanonicalJSON(_ bson: UnsafePointer<bson_t>) -> String {
-        var length: UInt = 0
-        guard let jsonPtr = bson_as_canonical_extended_json(bson, &length) else { return "{}" }
-        let json = String(cString: jsonPtr)
-        bson_free(jsonPtr)
-        return json
+    private func documentFromBson(_ bson: UnsafePointer<bson_t>) throws -> BSONDocument {
+        guard let dataPtr = bson_get_data(bson) else {
+            throw MongoServiceError.bsonError("Failed to get data pointer from bson_t.")
+        }
+        let length = Int(bson.pointee.len)
+        let data = Data(bytes: dataPtr, count: length)
+        return try BSONDocument(fromBSON: data)
     }
 
     private func errorMessage(_ error: bson_error_t) -> String {
