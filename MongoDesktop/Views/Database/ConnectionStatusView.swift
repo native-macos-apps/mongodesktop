@@ -4,7 +4,7 @@ import SwiftUI
 
 struct ConnectionStatusCenterView: View {
     @EnvironmentObject private var sessionViewModel: DatabaseSessionViewModel
-    @EnvironmentObject private var tabViewModel: QueryTabViewModel
+    @EnvironmentObject private var findVM: DocumentQueryViewModel
     @Binding var showServerInfo: Bool
 
     var body: some View {
@@ -26,22 +26,22 @@ struct ConnectionStatusCenterView: View {
 
             Spacer(minLength: 12)
 
-            if tabViewModel.isLoading || tabViewModel.lastQueryDuration != nil {
+            if findVM.isLoading || findVM.lastQueryDuration != nil {
                 HStack(spacing: 8) {
                     Divider().frame(height: 14)
 
-                    if tabViewModel.isLoading {
+                    if findVM.isLoading {
                         ProgressView()
                             .controlSize(.mini)
                             .frame(width: 12, height: 12)
                             .fixedSize()
-                            .opacity(tabViewModel.isLoading ? 1 : 0)
+                            .opacity(findVM.isLoading ? 1 : 0)
                     } else {
                         HStack(spacing: 4) {
                             Image(systemName: "clock")
                                 .font(.caption)
                                 .foregroundStyle(.secondary)
-                            Text(tabViewModel.lastQueryDuration.map { formattedDuration($0) } ?? "0ms")
+                            Text(findVM.lastQueryDuration.map { formattedDuration($0) } ?? "0ms")
                                 .font(.system(.caption, design: .monospaced))
                                 .foregroundStyle(.secondary)
                         }

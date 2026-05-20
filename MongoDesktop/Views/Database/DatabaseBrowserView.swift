@@ -7,6 +7,9 @@ struct DatabaseBrowserView: View {
     @EnvironmentObject private var connectionStore: ConnectionStore
     @EnvironmentObject private var sessionViewModel: DatabaseSessionViewModel
     @EnvironmentObject private var tabViewModel: QueryTabViewModel
+    @EnvironmentObject private var findVM: DocumentQueryViewModel
+    @EnvironmentObject private var aggregateVM: AggregateQueryViewModel
+    @EnvironmentObject private var indexVM: IndexQueryViewModel
     @Environment(\.addDatabaseTab) private var addDatabaseTab
     @State private var showServerInfo = false
 
@@ -14,11 +17,13 @@ struct DatabaseBrowserView: View {
         NavigationSplitView {
             CollectionSidebarView()
                 .environmentObject(sessionViewModel)
-                .environmentObject(tabViewModel)
         } detail: {
             DatabaseDetailView()
                 .environmentObject(sessionViewModel)
                 .environmentObject(tabViewModel)
+                .environmentObject(findVM)
+                .environmentObject(aggregateVM)
+                .environmentObject(indexVM)
         }
         .navigationSplitViewStyle(.balanced)
         .navigationTitle(sessionViewModel.connectionName)
@@ -41,7 +46,7 @@ struct DatabaseBrowserView: View {
             ToolbarItem(placement: .principal) {
                 ConnectionStatusCenterView(showServerInfo: $showServerInfo)
                     .environmentObject(sessionViewModel)
-                    .environmentObject(tabViewModel)
+                    .environmentObject(findVM)
             }
 
             ToolbarItemGroup(placement: .primaryAction) {

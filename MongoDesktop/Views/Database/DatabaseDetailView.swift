@@ -7,6 +7,9 @@ import SwiftBSON
 struct DatabaseDetailView: View {
     @EnvironmentObject private var sessionViewModel: DatabaseSessionViewModel
     @EnvironmentObject private var tabViewModel: QueryTabViewModel
+    @EnvironmentObject private var findVM: DocumentQueryViewModel
+    @EnvironmentObject private var aggregateVM: AggregateQueryViewModel
+    @EnvironmentObject private var indexVM: IndexQueryViewModel
     @EnvironmentObject private var globalSettings: GlobalSettings
     @Environment(\.databaseTabContext) private var tabContext
 
@@ -103,20 +106,20 @@ struct DatabaseDetailView: View {
                     switch tabViewModel.selectedTab {
                     case .document:
                         HStack(spacing: 12) {
-                            if let duration = tabViewModel.lastQueryDuration {
+                            if let duration = findVM.lastQueryDuration {
                                 Text(String(format: "Query took %.3fs", duration))
                             }
-                            Text("\(tabViewModel.documents.count) docs")
+                            Text("\(findVM.documents.count) docs")
                         }
                     case .aggregate:
                         HStack(spacing: 12) {
-                            if let duration = tabViewModel.aggregateQueryDuration {
+                            if let duration = aggregateVM.queryDuration {
                                 Text(String(format: "Pipeline took %.3fs", duration))
                             }
-                            Text("\(tabViewModel.aggregateDocuments.count) results")
+                            Text("\(aggregateVM.documents.count) results")
                         }
                     case .index:
-                        Text("\(tabViewModel.indexes.count) indexes")
+                        Text("\(indexVM.indexes.count) indexes")
                     }
                 }
                 .font(.caption)

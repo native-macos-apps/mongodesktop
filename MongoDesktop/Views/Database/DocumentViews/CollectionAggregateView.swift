@@ -3,9 +3,9 @@ import SwiftBSON
 
 struct CollectionAggregateView: View {
     @EnvironmentObject private var sessionViewModel: DatabaseSessionViewModel
-    @EnvironmentObject private var tabViewModel: QueryTabViewModel
+    @EnvironmentObject private var aggregateVM: AggregateQueryViewModel
     @EnvironmentObject private var globalSettings: GlobalSettings
-    @State private var aggregateError: String? = nil
+    @State private var pipelineError: String? = nil
     @State private var localViewMode: DocumentViewMode = .json
     @State private var selection: Set<String> = []
     
@@ -19,7 +19,7 @@ struct CollectionAggregateView: View {
                 
                 Spacer()
                 
-                if !tabViewModel.aggregateDocuments.isEmpty {
+                if !aggregateVM.documents.isEmpty {
                     Picker("", selection: $localViewMode) {
                         Image(systemName: "curlybraces").tag(DocumentViewMode.json)
                         Image(systemName: "tablecells").tag(DocumentViewMode.table)
@@ -38,8 +38,8 @@ struct CollectionAggregateView: View {
                 }
                 .buttonStyle(.plain)
                 .keyboardShortcut(.return, modifiers: [.command])
-                .disabled(aggregateError != nil)
-                .opacity(aggregateError != nil ? 0.55 : 1)
+                .disabled(pipelineError != nil)
+                .opacity(pipelineError != nil ? 0.55 : 1)
             }
             .padding(.horizontal, 16)
             .padding(.vertical, 8)
@@ -56,18 +56,18 @@ struct CollectionAggregateView: View {
                     .padding(.top, 8)
                 
                 JSONEditorView(
-                    text: $tabViewModel.aggregatePipelineText,
-                    errorMessage: $aggregateError,
+                    text: $aggregateVM.pipelineText,
+                    errorMessage: $pipelineError,
                     minHeight: 80
                 )
                 .frame(maxWidth: .infinity)
                 .frame(height: 80)
                 .overlay {
                     RoundedRectangle(cornerRadius: 7, style: .continuous)
-                        .stroke(aggregateError == nil ? Color.secondary.opacity(0.35) : .red.opacity(0.7), lineWidth: 1)
+                        .stroke(pipelineError == nil ? Color.secondary.opacity(0.35) : .red.opacity(0.7), lineWidth: 1)
                 }
                 .clipShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
-                .help(aggregateError ?? "Aggregation Pipeline: [ { \"$match\": { ... } }, ... ]")
+                .help(pipelineError ?? "Aggregation Pipeline: [ { \"$match\": { ... } }, ... ]")
                 .padding(.horizontal, 16)
                 .padding(.bottom, 8)
             }
@@ -77,14 +77,14 @@ struct CollectionAggregateView: View {
             
             // Result Area
             Group {
-                if tabViewModel.isAggregateLoading {
+                if aggregateVM.isLoading {
                     VStack {
                         Spacer()
                         ProgressView("Running aggregation pipeline...")
                         Spacer()
                     }
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
-                } else if let error = tabViewModel.aggregateError {
+                } else if let error = aggregateVM.error {
                     VStack(spacing: 12) {
                         Spacer()
                         Image(systemName: "exclamationmark.triangle")
@@ -100,7 +100,7 @@ struct CollectionAggregateView: View {
                         Spacer()
                     }
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
-                } else if tabViewModel.aggregateDocuments.isEmpty {
+                } else if aggregateVM.documents.isEmpty {
                     VStack(spacing: 8) {
                         Spacer()
                         Image(systemName: "square.stack.3d.up.dottedline")
@@ -118,9 +118,9 @@ struct CollectionAggregateView: View {
                 } else {
                     ZStack {
                         DocumentTableView(
-                            rows: tabViewModel.aggregateTableCache.rows,
-                            columns: tabViewModel.aggregateTableCache.columns,
-                            columnTypes: tabViewModel.aggregateTableCache.columnTypes,
+                            rows: aggregateVM.tableCache.rows,
+                            columns: aggregateVM.tableCache.columns,
+                            columnTypes: aggregateVM.tableCache.columnTypes,
                             selection: $selection,
                             isLoading: false
                         )
@@ -128,7 +128,7 @@ struct CollectionAggregateView: View {
                         .disabled(localViewMode != .table)
                         
                         DocumentJSONView(
-                            wrappedDocuments: tabViewModel.getAggregateJSONCache(timeZone: globalSettings.displayTimeZone),
+                            wrappedDocuments: aggregateVM.getJSONCache(timeZone: globalSettings.displayTimeZone),
                             isLoading: false
                         )
                         .opacity(localViewMode == .json ? 1 : 0)
@@ -140,7 +140,9 @@ struct CollectionAggregateView: View {
     }
     
     private func runAggregate() {
-        guard aggregateError == nil else { return }
-        Task { await tabViewModel.runAggregate(using: sessionViewModel) }
+        guard pipelineError == nil else { return }
+        guard let db = sessionViewModel.selectedDatabase,
+              let col = sessionViewModel.selectedCollection else { return }
+        Task { await aggregateVM.runAggregate(database: db, collection: col, session: sessionViewModel) }
     }
 }

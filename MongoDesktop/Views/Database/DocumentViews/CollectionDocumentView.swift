@@ -3,7 +3,7 @@ import SwiftBSON
 
 struct CollectionDocumentView: View {
     @EnvironmentObject private var sessionViewModel: DatabaseSessionViewModel
-    @EnvironmentObject private var tabViewModel: QueryTabViewModel
+    @EnvironmentObject private var findVM: DocumentQueryViewModel
     @EnvironmentObject private var globalSettings: GlobalSettings
     
     @State private var filterError: String? = nil
@@ -18,16 +18,16 @@ struct CollectionDocumentView: View {
             contentArea
         }
         .onAppear {
-            localViewMode = tabViewModel.viewMode
+            localViewMode = findVM.viewMode
         }
-        .onChange(of: tabViewModel.viewMode) { _, newValue in
+        .onChange(of: findVM.viewMode) { _, newValue in
             guard localViewMode != newValue else { return }
             localViewMode = newValue
         }
         .onChange(of: localViewMode) { _, newValue in
-            guard tabViewModel.viewMode != newValue else { return }
+            guard findVM.viewMode != newValue else { return }
             DispatchQueue.main.async {
-                tabViewModel.viewMode = newValue
+                findVM.viewMode = newValue
             }
         }
     }
@@ -43,7 +43,7 @@ struct CollectionDocumentView: View {
                     .font(.body)
 
                 JSONEditorView(
-                    text: $tabViewModel.filterText,
+                    text: $findVM.filterText,
                     errorMessage: $filterError,
                     minHeight: 28
                 )
@@ -56,8 +56,8 @@ struct CollectionDocumentView: View {
                 .clipShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
                 .help(filterError ?? "Filter JSON { \"field\": \"value\" }")
 
-                Button(action: { withAnimation(.easeInOut(duration: 0.2)) { tabViewModel.isAdvancedQuery.toggle() } }) {
-                    Label(tabViewModel.isAdvancedQuery ? "Simple" : "Advanced", systemImage: "slider.horizontal.3")
+                Button(action: { withAnimation(.easeInOut(duration: 0.2)) { findVM.isAdvancedQuery.toggle() } }) {
+                    Label(findVM.isAdvancedQuery ? "Simple" : "Advanced", systemImage: "slider.horizontal.3")
                         .font(.caption.weight(.medium))
                 }
                 .buttonStyle(.bordered)
@@ -79,7 +79,7 @@ struct CollectionDocumentView: View {
             .padding(.horizontal, 16)
             .padding(.vertical, 8)
 
-            if tabViewModel.isAdvancedQuery {
+            if findVM.isAdvancedQuery {
                 advancedQueryRow
                     .padding(.horizontal, 16)
                     .padding(.vertical, 8)
@@ -102,7 +102,7 @@ struct CollectionDocumentView: View {
                 .foregroundStyle(.secondary)
 
             JSONEditorView(
-                text: $tabViewModel.sortText,
+                text: $findVM.sortText,
                 errorMessage: $sortError,
                 minHeight: 28
             )
@@ -120,7 +120,7 @@ struct CollectionDocumentView: View {
                 .foregroundStyle(.secondary)
 
             JSONEditorView(
-                text: $tabViewModel.projectionText,
+                text: $findVM.projectionText,
                 errorMessage: $projectionError,
                 minHeight: 28
             )
@@ -152,39 +152,47 @@ struct CollectionDocumentView: View {
 
     private var paginationRow: some View {
         HStack(spacing: 12) {
-            Button(action: { Task { await tabViewModel.previousPage(using: sessionViewModel) } }) {
+            Button(action: {
+                guard let db = sessionViewModel.selectedDatabase,
+                      let col = sessionViewModel.selectedCollection else { return }
+                Task { await findVM.previousPage(database: db, collection: col, session: sessionViewModel) }
+            }) {
                 Image(systemName: "chevron.left")
                     .font(.caption.weight(.semibold))
             }
             .buttonStyle(.bordered)
             .controlSize(.small)
-            .disabled(tabViewModel.currentPage == 0)
+            .disabled(findVM.currentPage == 0)
 
-            Text("Page \(tabViewModel.currentPage + 1)")
+            Text("Page \(findVM.currentPage + 1)")
                 .font(.caption)
                 .foregroundStyle(.secondary)
                 .monospacedDigit()
 
-            Button(action: { Task { await tabViewModel.nextPage(using: sessionViewModel) } }) {
+            Button(action: {
+                guard let db = sessionViewModel.selectedDatabase,
+                      let col = sessionViewModel.selectedCollection else { return }
+                Task { await findVM.nextPage(database: db, collection: col, session: sessionViewModel) }
+            }) {
                 Image(systemName: "chevron.right")
                     .font(.caption.weight(.semibold))
             }
             .buttonStyle(.bordered)
             .controlSize(.small)
-            .disabled(!tabViewModel.hasMore)
+            .disabled(!findVM.hasMore)
 
             Divider()
                 .frame(height: 14)
                 .padding(.horizontal, 4)
 
-            Text("\(tabViewModel.documents.count) docs")
+            Text("\(findVM.documents.count) docs")
                 .font(.caption)
                 .foregroundStyle(.secondary)
                 .monospacedDigit()
 
             Spacer()
 
-            Text("Limit \(tabViewModel.pageSize)")
+            Text("Limit \(findVM.pageSize)")
                 .font(.caption)
                 .foregroundStyle(.tertiary)
 
@@ -197,18 +205,18 @@ struct CollectionDocumentView: View {
     private var contentArea: some View {
         ZStack {
             DocumentTableView(
-                rows: tabViewModel.documentTableCache.rows,
-                columns: tabViewModel.documentTableCache.columns,
-                columnTypes: tabViewModel.documentTableCache.columnTypes,
-                selection: $tabViewModel.selectedRowIds,
-                isLoading: tabViewModel.isLoading
+                rows: findVM.documentTableCache.rows,
+                columns: findVM.documentTableCache.columns,
+                columnTypes: findVM.documentTableCache.columnTypes,
+                selection: $findVM.selectedRowIds,
+                isLoading: findVM.isLoading
             )
             .opacity(localViewMode == .table ? 1 : 0)
             .disabled(localViewMode != .table)
             
             DocumentJSONView(
-                wrappedDocuments: tabViewModel.getDocumentJSONCache(timeZone: globalSettings.displayTimeZone),
-                isLoading: tabViewModel.isLoading
+                wrappedDocuments: findVM.getDocumentJSONCache(timeZone: globalSettings.displayTimeZone),
+                isLoading: findVM.isLoading
             )
             .opacity(localViewMode == .json ? 1 : 0)
             .disabled(localViewMode != .json)
@@ -219,13 +227,15 @@ struct CollectionDocumentView: View {
 
     private func runFind() {
         guard !hasSyntaxError else { return }
-        tabViewModel.resetPaging()
-        Task { await tabViewModel.runFind(using: sessionViewModel) }
+        guard let db = sessionViewModel.selectedDatabase,
+              let col = sessionViewModel.selectedCollection else { return }
+        findVM.resetPaging()
+        Task { await findVM.runFind(database: db, collection: col, session: sessionViewModel) }
     }
 
     private var hasSyntaxError: Bool {
         if filterError != nil { return true }
-        if tabViewModel.isAdvancedQuery && (sortError != nil || projectionError != nil) { return true }
+        if findVM.isAdvancedQuery && (sortError != nil || projectionError != nil) { return true }
         return false
     }
 }

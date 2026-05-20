@@ -27,15 +27,17 @@ final class DatabaseWindowViewModel: ObservableObject {
         tabs.append(tab)
         selectedTabId = tab.id
 
-        if viewModel.collectionName != nil {
-            viewModel.isLoading = true
-            viewModel.documents = []
-            Task { await viewModel.runFind(using: session) }
+        if let database = viewModel.databaseName, let collection = viewModel.collectionName {
+            viewModel.find.isLoading = true
+            viewModel.find.documents = []
+            Task { await viewModel.find.runFind(database: database, collection: collection, session: session) }
         }
     }
 
     func openTab(database: String, collection: String, session: DatabaseSessionViewModel) {
-        if let existingTab = tabs.first(where: { $0.viewModel.databaseName == database && $0.viewModel.collectionName == collection }) {
+        if let existingTab = tabs.first(where: {
+            $0.viewModel.databaseName == database && $0.viewModel.collectionName == collection
+        }) {
             selectedTabId = existingTab.id
             session.selectCollection(database: database, collection: collection)
             return
@@ -47,22 +49,22 @@ final class DatabaseWindowViewModel: ObservableObject {
             let viewModel = tabs[index].viewModel
             viewModel.configure(database: database, collection: collection)
             session.selectCollection(database: database, collection: collection)
-            viewModel.isLoading = true
-            viewModel.documents = []
-            Task { await viewModel.runFind(using: session) }
+            viewModel.find.isLoading = true
+            viewModel.find.documents = []
+            Task { await viewModel.find.runFind(database: database, collection: collection, session: session) }
             return
         }
 
         let viewModel = QueryTabViewModel()
         viewModel.configure(database: database, collection: collection)
-        viewModel.isLoading = true
-        viewModel.documents = []
+        viewModel.find.isLoading = true
+        viewModel.find.documents = []
 
         let tab = Tab(id: UUID(), viewModel: viewModel)
         tabs.append(tab)
         selectedTabId = tab.id
         session.selectCollection(database: database, collection: collection)
-        Task { await viewModel.runFind(using: session) }
+        Task { await viewModel.find.runFind(database: database, collection: collection, session: session) }
     }
 
     func selectTab(_ id: UUID, session: DatabaseSessionViewModel) {

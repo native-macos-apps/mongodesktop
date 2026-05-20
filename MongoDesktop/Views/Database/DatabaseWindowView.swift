@@ -91,6 +91,9 @@ private struct DatabaseTabContentView: View {
                 DatabaseBrowserView()
                     .environmentObject(sessionViewModel)
                     .environmentObject(tabViewModel)
+                    .environmentObject(tabViewModel.find)
+                    .environmentObject(tabViewModel.aggregate)
+                    .environmentObject(tabViewModel.index)
                     .environmentObject(connectionStore)
             } else if sessionViewModel.isLoading {
                 connectingView

@@ -3,7 +3,7 @@ import SwiftBSON
 
 struct CollectionIndexView: View {
     @EnvironmentObject private var sessionViewModel: DatabaseSessionViewModel
-    @EnvironmentObject private var tabViewModel: QueryTabViewModel
+    @EnvironmentObject private var indexVM: IndexQueryViewModel
     @State private var isShowingCreateDialog = false
     @State private var selectedIndexId: String? = nil
     
@@ -45,14 +45,14 @@ struct CollectionIndexView: View {
             Divider()
             
             // Content
-            if tabViewModel.isIndexesLoading {
+            if indexVM.isLoading {
                 VStack {
                     Spacer()
                     ProgressView("Retrieving collection indexes...")
                     Spacer()
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
-            } else if let error = tabViewModel.indexesError {
+            } else if let error = indexVM.error {
                 VStack(spacing: 12) {
                     Spacer()
                     Image(systemName: "exclamationmark.triangle")
@@ -68,7 +68,7 @@ struct CollectionIndexView: View {
                     Spacer()
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
-            } else if tabViewModel.indexes.isEmpty {
+            } else if indexVM.indexes.isEmpty {
                 VStack(spacing: 12) {
                     Spacer()
                     Image(systemName: "magnifyingglass")
@@ -160,7 +160,9 @@ struct CollectionIndexView: View {
     }
     
     private func refreshIndexes() {
-        Task { await tabViewModel.fetchIndexes(using: sessionViewModel) }
+        guard let db = sessionViewModel.selectedDatabase,
+              let col = sessionViewModel.selectedCollection else { return }
+        Task { await indexVM.fetchIndexes(database: db, collection: col, session: sessionViewModel) }
     }
     
     private func formatSize(_ bytes: Int64) -> String? {
@@ -171,7 +173,7 @@ struct CollectionIndexView: View {
     }
     
     private var indexRows: [IndexRow] {
-        tabViewModel.indexes.enumerated().map { offset, doc in
+        indexVM.indexes.enumerated().map { offset, doc in
             let name = doc["name"]?.stringValue ?? "index-\(offset)"
             let key = doc["key"]?.documentValue ?? BSONDocument()
             
@@ -237,7 +239,7 @@ struct CollectionIndexView: View {
                 version = "unknown"
             }
             
-            let stats = tabViewModel.indexStats[name]
+            let stats = indexVM.indexStats[name]
             
             return IndexRow(
                 id: name,

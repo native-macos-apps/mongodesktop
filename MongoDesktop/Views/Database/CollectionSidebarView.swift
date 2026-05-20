@@ -4,7 +4,6 @@ import SwiftUI
 
 struct CollectionSidebarView: View {
     @EnvironmentObject private var sessionViewModel: DatabaseSessionViewModel
-    @EnvironmentObject private var tabViewModel: QueryTabViewModel
     @Environment(\.databaseTabContext) private var tabContext
     @State private var collectionFilterText = ""
 
