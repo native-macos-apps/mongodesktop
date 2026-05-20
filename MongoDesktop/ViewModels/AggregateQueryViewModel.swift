@@ -65,6 +65,7 @@ final class AggregateQueryViewModel: ObservableObject {
         queryDuration = nil
 
         let start = Date()
+        let pipelineLabel = pipelineText.trimmingCharacters(in: .whitespacesAndNewlines)
 
         do {
             let pipeline = try parsePipeline(pipelineText)
@@ -74,10 +75,29 @@ final class AggregateQueryViewModel: ObservableObject {
                 pipeline: pipeline
             )
             self.documents = results
-            self.queryDuration = Date().timeIntervalSince(start)
+            let duration = Date().timeIntervalSince(start)
+            self.queryDuration = duration
+            QueryHistoryStore.shared.record(
+                database: database,
+                collection: collection,
+                queryType: .aggregate,
+                queryText: pipelineLabel,
+                duration: duration,
+                resultCount: results.count
+            )
         } catch let err {
+            let duration = Date().timeIntervalSince(start)
             self.error = err.localizedDescription
             session.lastError = err.localizedDescription
+            QueryHistoryStore.shared.record(
+                database: database,
+                collection: collection,
+                queryType: .aggregate,
+                queryText: pipelineLabel,
+                duration: duration,
+                isError: true,
+                errorMessage: err.localizedDescription
+            )
         }
 
         isLoading = false

@@ -93,6 +93,10 @@ final class DocumentQueryViewModel: ObservableObject {
         lastQueryDuration = nil
 
         let start = Date()
+        var queryLabel = filterText.trimmingCharacters(in: .whitespacesAndNewlines)
+        if isAdvancedQuery {
+            queryLabel += " | sort: \(sortText.trimmingCharacters(in: .whitespacesAndNewlines))"
+        }
 
         do {
             let filter = try parseFilter(filterText)
@@ -113,9 +117,28 @@ final class DocumentQueryViewModel: ObservableObject {
             self.documents = results
             hasMore = results.count == pageSize
             selectedRowIds = []
-            lastQueryDuration = Date().timeIntervalSince(start)
+            let duration = Date().timeIntervalSince(start)
+            lastQueryDuration = duration
+            QueryHistoryStore.shared.record(
+                database: database,
+                collection: collection,
+                queryType: .find,
+                queryText: queryLabel,
+                duration: duration,
+                resultCount: results.count
+            )
         } catch {
+            let duration = Date().timeIntervalSince(start)
             session.lastError = error.localizedDescription
+            QueryHistoryStore.shared.record(
+                database: database,
+                collection: collection,
+                queryType: .find,
+                queryText: queryLabel,
+                duration: duration,
+                isError: true,
+                errorMessage: error.localizedDescription
+            )
         }
 
         isLoading = false

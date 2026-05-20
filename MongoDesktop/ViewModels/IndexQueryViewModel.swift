@@ -27,6 +27,8 @@ final class IndexQueryViewModel: ObservableObject {
         isLoading = true
         error = nil
 
+        let start = Date()
+
         do {
             let results = try await mongoService.listIndexes(
                 database: database,
@@ -39,9 +41,28 @@ final class IndexQueryViewModel: ObservableObject {
 
             self.indexes = results
             self.indexStats = stats
+            let duration = Date().timeIntervalSince(start)
+            QueryHistoryStore.shared.record(
+                database: database,
+                collection: collection,
+                queryType: .index,
+                queryText: "listIndexes()",
+                duration: duration,
+                resultCount: results.count
+            )
         } catch let err {
+            let duration = Date().timeIntervalSince(start)
             self.error = err.localizedDescription
             session.lastError = err.localizedDescription
+            QueryHistoryStore.shared.record(
+                database: database,
+                collection: collection,
+                queryType: .index,
+                queryText: "listIndexes()",
+                duration: duration,
+                isError: true,
+                errorMessage: err.localizedDescription
+            )
         }
 
         isLoading = false
