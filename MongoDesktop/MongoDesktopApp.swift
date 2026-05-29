@@ -1,4 +1,5 @@
 import SwiftUI
+import AppKit
 
 // MARK: - WindowCoordinator
 
@@ -7,6 +8,12 @@ import SwiftUI
 final class WindowCoordinator: ObservableObject {
     static let shared = WindowCoordinator()
     private init() {}
+
+    private weak var connectionsWindow: NSWindow?
+
+    func registerConnectionsWindow(_ window: NSWindow?) {
+        connectionsWindow = window
+    }
 
     /// Hides the Connections window (called after connecting)
     func hideConnectionsWindow() {
@@ -19,10 +26,6 @@ final class WindowCoordinator: ObservableObject {
             win.makeKeyAndOrderFront(nil)
             NSApp.activate(ignoringOtherApps: true)
         }
-    }
-
-    private var connectionsWindow: NSWindow? {
-        NSApp.windows.first { $0.title == "Connections" }
     }
 }
 

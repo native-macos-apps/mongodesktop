@@ -1,4 +1,5 @@
 import SwiftUI
+import AppKit
 
 // MARK: - ConnectionsListView
 
@@ -18,6 +19,7 @@ struct ConnectionsListView: View {
         } detail: {
             detailContent
         }
+        .background(ConnectionsWindowAccessor())
         .navigationSplitViewStyle(.balanced)
         .frame(minWidth: 480, idealWidth: 700, minHeight: 320, idealHeight: 400)
         .sheet(item: $editorMode) { mode in
@@ -110,13 +112,7 @@ struct ConnectionsListView: View {
                         connection: connection,
                         isSelected: selectedId == connection.id,
                         onSelect: { selectedId = connection.id },
-                        onConnect: {
-                            openWindow(value: connection.id)
-                            // Hide Connections window after opening Database window
-                            DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
-                                WindowCoordinator.shared.hideConnectionsWindow()
-                            }
-                        },
+                        onConnect: { openConnection(connection) },
                         onEdit: { openEditor(for: connection) },
                         onDelete: {
                             selectedId = connection.id
@@ -167,6 +163,15 @@ struct ConnectionsListView: View {
         editorMode = .edit(connection.id)
     }
 
+    private func openConnection(_ connection: ConnectionProfile) {
+        selectedId = connection.id
+        openWindow(value: connection.id)
+
+        Task { @MainActor in
+            WindowCoordinator.shared.hideConnectionsWindow()
+        }
+    }
+
     private func duplicate(_ connection: ConnectionProfile) {
         var copied = connection
         copied.id = UUID()
@@ -189,6 +194,21 @@ struct ConnectionsListView: View {
         switch mode {
         case .create: connectionStore.add(draft.build())
         case .edit(let id): connectionStore.update(draft.build(id: id))
+        }
+    }
+}
+
+private struct ConnectionsWindowAccessor: NSViewRepresentable {
+    func makeNSView(context: Context) -> TrackingView {
+        TrackingView()
+    }
+
+    func updateNSView(_ nsView: TrackingView, context: Context) {}
+
+    final class TrackingView: NSView {
+        override func viewDidMoveToWindow() {
+            super.viewDidMoveToWindow()
+            WindowCoordinator.shared.registerConnectionsWindow(window)
         }
     }
 }
