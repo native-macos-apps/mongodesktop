@@ -50,7 +50,7 @@ struct MongoDesktopApp: App {
                 .environmentObject(connectionStore)
                 .environmentObject(GlobalSettings.shared)
         }
-        .defaultSize(width: 1000, height: 720)
+        .defaultSize(width: 1200, height: 800)
         .restorationBehavior(.disabled)
         .windowStyle(.hiddenTitleBar)
         .windowToolbarStyle(.unified(showsTitle: true))
