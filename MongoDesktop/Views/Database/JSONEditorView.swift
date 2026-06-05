@@ -321,6 +321,30 @@ fileprivate final class JSONTextView: NSTextView {
             }
         }
     }
+
+    override var rangeForUserCompletion: NSRange {
+        let selected = selectedRange()
+        guard selected.length == 0 else { return selected }
+
+        let nsText = string as NSString
+        var start = selected.location
+        var end = selected.location
+
+        while start > 0, isCompletionCharacter(nsText.substring(with: NSRange(location: start - 1, length: 1))) {
+            start -= 1
+        }
+
+        while end < nsText.length, isCompletionCharacter(nsText.substring(with: NSRange(location: end, length: 1))) {
+            end += 1
+        }
+
+        return NSRange(location: start, length: end - start)
+    }
+
+    private func isCompletionCharacter(_ value: String) -> Bool {
+        let allowed = CharacterSet.alphanumerics.union(CharacterSet(charactersIn: "_$"))
+        return value.unicodeScalars.allSatisfy { allowed.contains($0) }
+    }
 }
 
 private final class JSONSyntaxHighlighter {
