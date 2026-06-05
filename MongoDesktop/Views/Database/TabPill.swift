@@ -12,11 +12,6 @@ struct TabPill: View {
 
     var body: some View {
         HStack(spacing: 6) {
-            Text(title)
-                .font(.system(size: 13, weight: isSelected ? .medium : .regular))
-                .foregroundStyle(isSelected ? .primary : .secondary)
-                .lineLimit(1)
-            
             Button(action: onClose) {
                 Image(systemName: "xmark")
                     .font(.system(size: 10, weight: .bold))
@@ -26,9 +21,16 @@ struct TabPill: View {
             }
             .buttonStyle(.plain)
             .opacity(isHovered || isSelected ? 1 : 0)
+
+            Text(title)
+                .font(.system(size: 13, weight: isSelected ? .medium : .regular))
+                .foregroundStyle(isSelected ? .primary : .secondary)
+                .lineLimit(1)
+                .frame(maxWidth: .infinity, alignment: .center)
         }
-        .padding(.leading, 14)
-        .padding(.trailing, 8)
+        .padding(.leading, 8)
+        .padding(.trailing, 14)
+        .frame(maxWidth: .infinity)
         .frame(height: 26)
         .background(
             ZStack {
