@@ -12,7 +12,7 @@ struct DatabaseDetailView: View {
     @EnvironmentObject private var indexVM: IndexQueryViewModel
     @EnvironmentObject private var globalSettings: GlobalSettings
     @Environment(\.databaseTabContext) private var tabContext
-    @State private var showQueryConsole = false
+    @Binding var showQueryConsole: Bool
 
     var body: some View {
         VStack(spacing: 0) {
@@ -140,34 +140,6 @@ struct DatabaseDetailView: View {
                 .font(.caption)
                 .foregroundStyle(.secondary)
 
-                Divider()
-                    .frame(height: 14)
-                    .padding(.horizontal, 8)
-
-                // Console Toggle Button
-                Button(action: {
-                    withAnimation(.spring(duration: 0.3)) {
-                        showQueryConsole.toggle()
-                    }
-                }) {
-                    HStack(spacing: 5) {
-                        Image(systemName: showQueryConsole ? "terminal.fill" : "terminal")
-                            .font(.system(size: 12, weight: .medium))
-                        Text("Console")
-                            .font(.system(size: 11, weight: .medium))
-                    }
-                    .foregroundStyle(showQueryConsole ? Color.accentColor : .secondary)
-                    .padding(.horizontal, 9)
-                    .padding(.vertical, 4)
-                    .background(
-                        showQueryConsole
-                            ? Color.accentColor.opacity(0.12)
-                            : Color.secondary.opacity(0.08),
-                        in: RoundedRectangle(cornerRadius: 6)
-                    )
-                }
-                .buttonStyle(.plain)
-                .help(showQueryConsole ? "Hide Query Console" : "Show Query Console")
             }
             .padding(.horizontal, 16)
             .padding(.vertical, 8)

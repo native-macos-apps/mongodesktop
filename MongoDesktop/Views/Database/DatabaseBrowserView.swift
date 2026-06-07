@@ -12,13 +12,14 @@ struct DatabaseBrowserView: View {
     @EnvironmentObject private var indexVM: IndexQueryViewModel
     @Environment(\.addDatabaseTab) private var addDatabaseTab
     @State private var showServerInfo = false
+    @State private var showQueryConsole = false
 
     var body: some View {
         NavigationSplitView {
             CollectionSidebarView()
                 .environmentObject(sessionViewModel)
         } detail: {
-            DatabaseDetailView()
+            DatabaseDetailView(showQueryConsole: $showQueryConsole)
                 .environmentObject(sessionViewModel)
                 .environmentObject(tabViewModel)
                 .environmentObject(findVM)
@@ -55,6 +56,15 @@ struct DatabaseBrowserView: View {
                         .font(.caption.weight(.semibold))
                 }
                 .help("New Tab")
+
+                Button(action: {
+                    withAnimation(.spring(duration: 0.3)) {
+                        showQueryConsole.toggle()
+                    }
+                }) {
+                    Image(systemName: showQueryConsole ? "terminal.fill" : "terminal")
+                }
+                .help(showQueryConsole ? "Hide Query Console" : "Show Query Console")
             }
         }
         .overlay(alignment: .topLeading) {
