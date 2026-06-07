@@ -56,13 +56,11 @@ struct DatabaseDetailView: View {
     private func tabBar(_ context: DatabaseTabContext) -> some View {
         GeometryReader { geometry in
             let horizontalPadding: CGFloat = 16
-            let tabSpacing: CGFloat = 8
-            let addButtonWidth: CGFloat = 28
             let trackPadding: CGFloat = 3
             let minimumScrollableTabWidth: CGFloat = 120
             let trackWidth = max(
                 0,
-                geometry.size.width - (horizontalPadding * 2) - tabSpacing - addButtonWidth
+                geometry.size.width - (horizontalPadding * 2)
             )
             let trackInnerWidth = max(0, trackWidth - (trackPadding * 2))
             let tabWidth = max(
@@ -71,40 +69,27 @@ struct DatabaseDetailView: View {
             )
             let scrollContentWidth = (tabWidth * CGFloat(context.tabs.count)) + (trackPadding * 2)
 
-            HStack(spacing: tabSpacing) {
-                ScrollView(.horizontal, showsIndicators: false) {
-                    // Tab track
-                    HStack(spacing: 0) {
-                        ForEach(context.tabs) { tab in
-                            TabPill(
-                                title: tab.title,
-                                isSelected: tab.id == context.selectedId,
-                                onSelect: { context.select(tab.id) },
-                                onClose: { context.close(tab.id) }
-                            )
-                            .frame(width: tabWidth)
-                        }
+            ScrollView(.horizontal, showsIndicators: false) {
+                // Tab track
+                HStack(spacing: 0) {
+                    ForEach(context.tabs) { tab in
+                        TabPill(
+                            title: tab.title,
+                            isSelected: tab.id == context.selectedId,
+                            onSelect: { context.select(tab.id) },
+                            onClose: { context.close(tab.id) }
+                        )
+                        .frame(width: tabWidth)
                     }
-                    .padding(trackPadding)
-                    .frame(width: scrollContentWidth, alignment: .leading)
-                    .background(
-                        Capsule(style: .continuous)
-                            .fill(.regularMaterial)
-                    )
                 }
-                .frame(width: trackWidth)
-
-                // Add tab button (+)
-                Button(action: context.add) {
-                    Image(systemName: "plus")
-                        .font(.system(size: 14, weight: .medium))
-                        .foregroundStyle(.secondary)
-                        .frame(width: 28, height: 28)
-                        .background(Circle().fill(.regularMaterial))
-                }
-                .buttonStyle(.plain)
-                .help("New Tab")
+                .padding(trackPadding)
+                .frame(width: scrollContentWidth, alignment: .leading)
+                .background(
+                    Capsule(style: .continuous)
+                        .fill(.regularMaterial)
+                )
             }
+            .frame(width: trackWidth)
             .padding(.horizontal, horizontalPadding)
             .padding(.vertical, 8)
             .frame(width: geometry.size.width, alignment: .leading)
