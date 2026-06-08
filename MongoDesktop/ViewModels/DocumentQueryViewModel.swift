@@ -26,8 +26,7 @@ final class DocumentQueryViewModel: ObservableObject {
 
     @Published var documents: [BSONDocument] = [] {
         didSet {
-            documentTableCache = TableDataCache(documents: documents)
-            documentJSONCache = nil
+            documentTableCache = nil
         }
     }
     @Published var selectedRowIds: Set<String> = []
@@ -36,9 +35,7 @@ final class DocumentQueryViewModel: ObservableObject {
 
     // MARK: - Cache
 
-    @Published var documentTableCache = TableDataCache(documents: [])
-    private var documentJSONCache: [JSONDocumentWrapper]?
-    private var documentJSONTimeZone: TimeZone?
+    private var documentTableCache: TableDataCache?
 
     // MARK: - Dependencies
 
@@ -50,22 +47,17 @@ final class DocumentQueryViewModel: ObservableObject {
 
     // MARK: - Cache Access
 
-    func getDocumentJSONCache(timeZone: TimeZone) -> [JSONDocumentWrapper] {
-        if let cache = documentJSONCache, documentJSONTimeZone == timeZone {
-            return cache
+    var documentKeysForCompletion: [String] {
+        documentTableCache?.columns ?? []
+    }
+
+    func getDocumentTableCache() -> TableDataCache {
+        if let documentTableCache {
+            return documentTableCache
         }
-        let cache = documents.enumerated().map { index, doc in
-            let id: String
-            if let rawId = doc["_id"] {
-                id = "id-\(String(describing: rawId))"
-            } else {
-                id = "idx-\(index)"
-            }
-            let nodes = doc.map { JSONNode(key: $0.key, value: $0.value, timeZone: timeZone) }
-            return JSONDocumentWrapper(id: id, index: index, document: doc, nodes: nodes)
-        }
-        self.documentJSONCache = cache
-        self.documentJSONTimeZone = timeZone
+
+        let cache = TableDataCache(documents: documents)
+        documentTableCache = cache
         return cache
     }
 

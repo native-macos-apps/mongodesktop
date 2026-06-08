@@ -50,7 +50,7 @@ struct CollectionAggregateView: View {
                 JSONEditorView(
                     text: $aggregateVM.pipelineText,
                     errorMessage: $pipelineError,
-                    documentKeys: findVM.documentTableCache.columns,
+                    documentKeys: findVM.documentKeysForCompletion,
                     minHeight: 80
                 )
                 .frame(maxWidth: .infinity)
@@ -109,27 +109,34 @@ struct CollectionAggregateView: View {
                     }
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
                 } else {
-                    ZStack {
-                        DocumentTableView(
-                            rows: aggregateVM.tableCache.rows,
-                            columns: aggregateVM.tableCache.columns,
-                            columnTypes: aggregateVM.tableCache.columnTypes,
-                            selection: $selection,
-                            isLoading: false
-                        )
-                        .opacity(viewMode == .table ? 1 : 0)
-                        .disabled(viewMode != .table)
-                        
-                        DocumentJSONView(
-                            wrappedDocuments: aggregateVM.getJSONCache(timeZone: globalSettings.displayTimeZone),
-                            isLoading: false
-                        )
-                        .opacity(viewMode == .json ? 1 : 0)
-                        .disabled(viewMode != .json)
+                    Group {
+                        if viewMode == .table {
+                            aggregateTableContent
+                        } else {
+                            aggregateJSONContent
+                        }
                     }
                 }
             }
         }
+    }
+
+    private var aggregateTableContent: some View {
+        DocumentTableView(
+            rows: aggregateVM.tableCache.rows,
+            columns: aggregateVM.tableCache.columns,
+            columnTypes: aggregateVM.tableCache.columnTypes,
+            selection: $selection,
+            isLoading: false
+        )
+    }
+
+    private var aggregateJSONContent: some View {
+        DocumentJSONView(
+            documents: aggregateVM.documents,
+            timeZone: globalSettings.displayTimeZone,
+            isLoading: false
+        )
     }
     
     private func runAggregate() {

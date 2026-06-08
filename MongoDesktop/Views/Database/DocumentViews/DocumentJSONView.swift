@@ -4,11 +4,12 @@ import SwiftBSON
 // MARK: - DocumentJSONView
 
 struct DocumentJSONView: View {
-    let wrappedDocuments: [JSONDocumentWrapper]
+    let documents: [BSONDocument]
+    let timeZone: TimeZone
     let isLoading: Bool
 
     var body: some View {
-        if isLoading && wrappedDocuments.isEmpty {
+        if isLoading && documents.isEmpty {
             VStack(spacing: 12) {
                 ProgressView()
                     .controlSize(.regular)
@@ -16,7 +17,7 @@ struct DocumentJSONView: View {
                     .foregroundStyle(.secondary)
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
-        } else if wrappedDocuments.isEmpty {
+        } else if documents.isEmpty {
             VStack {
                 ContentUnavailableView(
                     "No documents",
@@ -29,8 +30,8 @@ struct DocumentJSONView: View {
         } else {
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 10) {
-                    ForEach(wrappedDocuments) { wrapper in
-                        JSONDocumentCard(wrapper: wrapper)
+                    ForEach(documents.indices, id: \.self) { index in
+                        JSONDocumentCard(wrapper: wrapper(for: documents[index], index: index))
                     }
                 }
                 .padding(16)
@@ -46,6 +47,22 @@ struct DocumentJSONView: View {
                 }
             }
         }
+    }
+
+    private func wrapper(for document: BSONDocument, index: Int) -> JSONDocumentWrapper {
+        let id: String
+        if let rawId = document["_id"] {
+            id = "id-\(String(describing: rawId))"
+        } else {
+            id = "idx-\(index)"
+        }
+
+        return JSONDocumentWrapper(
+            id: id,
+            index: index,
+            document: document,
+            nodes: document.map { JSONNode(key: $0.key, value: $0.value, timeZone: timeZone) }
+        )
     }
 }
 

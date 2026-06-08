@@ -45,7 +45,7 @@ struct CollectionDocumentView: View {
                 JSONEditorView(
                     text: $findVM.filterText,
                     errorMessage: $filterError,
-                    documentKeys: findVM.documentTableCache.columns,
+                    documentKeys: findVM.documentKeysForCompletion,
                     minHeight: 28
                 )
                 .frame(maxWidth: .infinity)
@@ -98,7 +98,7 @@ struct CollectionDocumentView: View {
             JSONEditorView(
                 text: $findVM.sortText,
                 errorMessage: $sortError,
-                documentKeys: findVM.documentTableCache.columns,
+                documentKeys: findVM.documentKeysForCompletion,
                 minHeight: 28
             )
             .frame(maxWidth: .infinity)
@@ -117,7 +117,7 @@ struct CollectionDocumentView: View {
             JSONEditorView(
                 text: $findVM.projectionText,
                 errorMessage: $projectionError,
-                documentKeys: findVM.documentTableCache.columns,
+                documentKeys: findVM.documentKeysForCompletion,
                 minHeight: 28
             )
             .frame(maxWidth: .infinity)
@@ -134,24 +134,33 @@ struct CollectionDocumentView: View {
     // MARK: - Content Area
 
     private var contentArea: some View {
-        ZStack {
-            DocumentTableView(
-                rows: findVM.documentTableCache.rows,
-                columns: findVM.documentTableCache.columns,
-                columnTypes: findVM.documentTableCache.columnTypes,
-                selection: $findVM.selectedRowIds,
-                isLoading: findVM.isLoading
-            )
-            .opacity(localViewMode == .table ? 1 : 0)
-            .disabled(localViewMode != .table)
-            
-            DocumentJSONView(
-                wrappedDocuments: findVM.getDocumentJSONCache(timeZone: globalSettings.displayTimeZone),
-                isLoading: findVM.isLoading
-            )
-            .opacity(localViewMode == .json ? 1 : 0)
-            .disabled(localViewMode != .json)
+        Group {
+            if localViewMode == .table {
+                tableContent
+            } else {
+                jsonContent
+            }
         }
+    }
+
+    private var tableContent: some View {
+        let tableCache = findVM.getDocumentTableCache()
+
+        return DocumentTableView(
+            rows: tableCache.rows,
+            columns: tableCache.columns,
+            columnTypes: tableCache.columnTypes,
+            selection: $findVM.selectedRowIds,
+            isLoading: findVM.isLoading
+        )
+    }
+
+    private var jsonContent: some View {
+        DocumentJSONView(
+            documents: findVM.documents,
+            timeZone: globalSettings.displayTimeZone,
+            isLoading: findVM.isLoading
+        )
     }
 
     // MARK: - Actions
