@@ -7,7 +7,7 @@ struct CollectionAggregateView: View {
     @EnvironmentObject private var findVM: DocumentQueryViewModel
     @EnvironmentObject private var globalSettings: GlobalSettings
     @State private var pipelineError: String? = nil
-    @State private var localViewMode: DocumentViewMode = .json
+    @Binding var viewMode: DocumentViewMode
     @State private var selection: Set<String> = []
     
     var body: some View {
@@ -19,15 +19,6 @@ struct CollectionAggregateView: View {
                     .foregroundStyle(.primary)
                 
                 Spacer()
-                
-                if !aggregateVM.documents.isEmpty {
-                    Picker("", selection: $localViewMode) {
-                        Image(systemName: "curlybraces").tag(DocumentViewMode.json)
-                        Image(systemName: "tablecells").tag(DocumentViewMode.table)
-                    }
-                    .pickerStyle(.segmented)
-                    .frame(width: 70)
-                }
                 
                 Button(action: runAggregate) {
                     Label("Run Pipeline", systemImage: "play.fill")
@@ -126,15 +117,15 @@ struct CollectionAggregateView: View {
                             selection: $selection,
                             isLoading: false
                         )
-                        .opacity(localViewMode == .table ? 1 : 0)
-                        .disabled(localViewMode != .table)
+                        .opacity(viewMode == .table ? 1 : 0)
+                        .disabled(viewMode != .table)
                         
                         DocumentJSONView(
                             wrappedDocuments: aggregateVM.getJSONCache(timeZone: globalSettings.displayTimeZone),
                             isLoading: false
                         )
-                        .opacity(localViewMode == .json ? 1 : 0)
-                        .disabled(localViewMode != .json)
+                        .opacity(viewMode == .json ? 1 : 0)
+                        .disabled(viewMode != .json)
                     }
                 }
             }

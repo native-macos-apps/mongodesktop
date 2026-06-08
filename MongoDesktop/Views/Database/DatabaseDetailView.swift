@@ -13,6 +13,7 @@ struct DatabaseDetailView: View {
     @EnvironmentObject private var globalSettings: GlobalSettings
     @Environment(\.databaseTabContext) private var tabContext
     @Binding var showQueryConsole: Bool
+    @State private var aggregateViewMode: DocumentViewMode = .json
 
     var body: some View {
         VStack(spacing: 0) {
@@ -30,7 +31,7 @@ struct DatabaseDetailView: View {
                     case .document:
                         CollectionDocumentView()
                     case .aggregate:
-                        CollectionAggregateView()
+                        CollectionAggregateView(viewMode: $aggregateViewMode)
                     case .index:
                         CollectionIndexView()
                     }
@@ -124,14 +125,14 @@ struct DatabaseDetailView: View {
                             if let duration = findVM.lastQueryDuration {
                                 Text(String(format: "Query took %.3fs", duration))
                             }
-                            Text("\(findVM.documents.count) docs")
+                            documentFooterControls
                         }
                     case .aggregate:
                         HStack(spacing: 12) {
                             if let duration = aggregateVM.queryDuration {
                                 Text(String(format: "Pipeline took %.3fs", duration))
                             }
-                            Text("\(aggregateVM.documents.count) results")
+                            aggregateFooterControls
                         }
                     case .index:
                         Text("\(indexVM.indexes.count) indexes")
@@ -145,5 +146,84 @@ struct DatabaseDetailView: View {
             .padding(.vertical, 8)
             .background(.ultraThinMaterial)
         }
+    }
+
+    private var documentFooterControls: some View {
+        HStack(spacing: 12) {
+            Button(action: previousDocumentPage) {
+                Image(systemName: "chevron.left")
+                    .font(.caption.weight(.semibold))
+            }
+            .buttonStyle(.bordered)
+            .controlSize(.small)
+            .disabled(findVM.currentPage == 0)
+            .help("Previous Page")
+
+            Text("Page \(findVM.currentPage + 1)")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .monospacedDigit()
+
+            Button(action: nextDocumentPage) {
+                Image(systemName: "chevron.right")
+                    .font(.caption.weight(.semibold))
+            }
+            .buttonStyle(.bordered)
+            .controlSize(.small)
+            .disabled(!findVM.hasMore)
+            .help("Next Page")
+
+            Divider()
+                .frame(height: 14)
+                .padding(.horizontal, 4)
+
+            Text("\(findVM.documents.count) docs")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .monospacedDigit()
+
+            Text("Limit \(findVM.pageSize)")
+                .font(.caption)
+                .foregroundStyle(.tertiary)
+
+            Picker("", selection: $findVM.viewMode) {
+                ForEach(DocumentViewMode.allCases) { mode in
+                    Image(systemName: mode == .table ? "tablecells" : "curlybraces")
+                        .tag(mode)
+                }
+            }
+            .pickerStyle(.segmented)
+            .frame(width: 70)
+        }
+    }
+
+    private var aggregateFooterControls: some View {
+        HStack(spacing: 12) {
+            Text("\(aggregateVM.documents.count) results")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .monospacedDigit()
+
+            if !aggregateVM.documents.isEmpty {
+                Picker("", selection: $aggregateViewMode) {
+                    Image(systemName: "curlybraces").tag(DocumentViewMode.json)
+                    Image(systemName: "tablecells").tag(DocumentViewMode.table)
+                }
+                .pickerStyle(.segmented)
+                .frame(width: 70)
+            }
+        }
+    }
+
+    private func previousDocumentPage() {
+        guard let db = sessionViewModel.selectedDatabase,
+              let col = sessionViewModel.selectedCollection else { return }
+        Task { await findVM.previousPage(database: db, collection: col, session: sessionViewModel) }
+    }
+
+    private func nextDocumentPage() {
+        guard let db = sessionViewModel.selectedDatabase,
+              let col = sessionViewModel.selectedCollection else { return }
+        Task { await findVM.nextPage(database: db, collection: col, session: sessionViewModel) }
     }
 }
