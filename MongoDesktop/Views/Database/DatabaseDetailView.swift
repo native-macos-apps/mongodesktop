@@ -14,6 +14,9 @@ struct DatabaseDetailView: View {
     @Environment(\.databaseTabContext) private var tabContext
     @Binding var showQueryConsole: Bool
     @State private var aggregateViewMode: DocumentViewMode = .json
+    @State private var showDocumentPagingSettings = false
+    @State private var documentOffsetDraft = 0
+    @State private var documentLimitDraft = 100
 
     var body: some View {
         VStack(spacing: 0) {
@@ -118,26 +121,13 @@ struct DatabaseDetailView: View {
 
                 Spacer()
 
-                Group {
-                    switch tabViewModel.selectedTab {
-                    case .document:
-                        HStack(spacing: 12) {
-                            if let duration = findVM.lastQueryDuration {
-                                Text(String(format: "Query took %.3fs", duration))
-                            }
-                            documentFooterControls
-                        }
-                    case .aggregate:
-                        HStack(spacing: 12) {
-                            if let duration = aggregateVM.queryDuration {
-                                Text(String(format: "Pipeline took %.3fs", duration))
-                            }
-                            aggregateFooterControls
-                        }
-                    case .index:
-                        Text("\(indexVM.indexes.count) indexes")
-                    }
-                }
+                footerSummary
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+
+                Spacer()
+
+                footerControls
                 .font(.caption)
                 .foregroundStyle(.secondary)
 
@@ -148,43 +138,56 @@ struct DatabaseDetailView: View {
         }
     }
 
+    @ViewBuilder
+    private var footerSummary: some View {
+        if tabViewModel.selectedTab == .document {
+            Text(documentRangeText)
+                .monospacedDigit()
+        } else if tabViewModel.selectedTab == .aggregate {
+            Text("\(aggregateVM.documents.count) results")
+                .monospacedDigit()
+        } else {
+            Text("\(indexVM.indexes.count) indexes")
+                .monospacedDigit()
+        }
+    }
+
+    @ViewBuilder
+    private var footerControls: some View {
+        if tabViewModel.selectedTab == .document {
+            documentFooterControls
+        } else if tabViewModel.selectedTab == .aggregate {
+            aggregateFooterControls
+        }
+    }
+
     private var documentFooterControls: some View {
-        HStack(spacing: 12) {
+        HStack(spacing: 4) {
             Button(action: previousDocumentPage) {
                 Image(systemName: "chevron.left")
                     .font(.caption.weight(.semibold))
             }
             .buttonStyle(.bordered)
-            .controlSize(.small)
-            .disabled(findVM.currentPage == 0)
+            .disabled(findVM.offset == 0)
             .help("Previous Page")
 
-            Text("Page \(findVM.currentPage + 1)")
-                .font(.caption)
-                .foregroundStyle(.secondary)
-                .monospacedDigit()
+            Button(action: openDocumentPagingSettings) {
+                Image(systemName: "slider.horizontal.3")
+                    .font(.caption.weight(.semibold))
+            }
+            .buttonStyle(.bordered)
+            .help("Pagination Settings")
+            .popover(isPresented: $showDocumentPagingSettings, arrowEdge: .bottom) {
+                documentPagingSettingsPanel
+            }
 
             Button(action: nextDocumentPage) {
                 Image(systemName: "chevron.right")
                     .font(.caption.weight(.semibold))
             }
             .buttonStyle(.bordered)
-            .controlSize(.small)
             .disabled(!findVM.hasMore)
             .help("Next Page")
-
-            Divider()
-                .frame(height: 14)
-                .padding(.horizontal, 4)
-
-            Text("\(findVM.documents.count) docs")
-                .font(.caption)
-                .foregroundStyle(.secondary)
-                .monospacedDigit()
-
-            Text("Limit \(findVM.pageSize)")
-                .font(.caption)
-                .foregroundStyle(.tertiary)
 
             Picker("", selection: $findVM.viewMode) {
                 ForEach(DocumentViewMode.allCases) { mode in
@@ -197,17 +200,56 @@ struct DatabaseDetailView: View {
         }
     }
 
+    private var documentRangeText: String {
+        guard !findVM.documents.isEmpty else {
+            return "0 docs of \(findVM.totalDocuments)"
+        }
+
+        let from = findVM.offset + 1
+        let to = findVM.offset + findVM.documents.count
+        return "\(from) - \(to) docs of \(findVM.totalDocuments)"
+    }
+
+    private var documentPagingSettingsPanel: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack {
+                Text("Offset")
+                    .foregroundStyle(.secondary)
+                    .frame(width: 32, alignment: .leading)
+                TextField("0", value: $documentOffsetDraft, format: .number)
+                    .textFieldStyle(.roundedBorder)
+                    .frame(maxWidth: .infinity)
+            }
+
+            HStack {
+                Text("Limit")
+                    .foregroundStyle(.secondary)
+                    .frame(width: 32, alignment: .leading)
+                TextField("100", value: $documentLimitDraft, format: .number)
+                    .textFieldStyle(.roundedBorder)
+                    .frame(maxWidth: .infinity)
+            }
+
+            HStack {
+                Spacer()
+
+                Button("Apply") {
+                    applyDocumentPagingSettings()
+                }
+                .buttonStyle(.borderedProminent)
+                .controlSize(.small)
+            }
+        }
+        .padding(14)
+        .frame(width: 160)
+    }
+
     private var aggregateFooterControls: some View {
         HStack(spacing: 12) {
-            Text("\(aggregateVM.documents.count) results")
-                .font(.caption)
-                .foregroundStyle(.secondary)
-                .monospacedDigit()
-
             if !aggregateVM.documents.isEmpty {
                 Picker("", selection: $aggregateViewMode) {
-                    Image(systemName: "curlybraces").tag(DocumentViewMode.json)
                     Image(systemName: "tablecells").tag(DocumentViewMode.table)
+                    Image(systemName: "curlybraces").tag(DocumentViewMode.json)
                 }
                 .pickerStyle(.segmented)
                 .frame(width: 70)
@@ -225,5 +267,27 @@ struct DatabaseDetailView: View {
         guard let db = sessionViewModel.selectedDatabase,
               let col = sessionViewModel.selectedCollection else { return }
         Task { await findVM.nextPage(database: db, collection: col, session: sessionViewModel) }
+    }
+
+    private func openDocumentPagingSettings() {
+        documentOffsetDraft = findVM.offset
+        documentLimitDraft = findVM.pageSize
+        showDocumentPagingSettings = true
+    }
+
+    private func applyDocumentPagingSettings() {
+        guard let db = sessionViewModel.selectedDatabase,
+              let col = sessionViewModel.selectedCollection else { return }
+
+        showDocumentPagingSettings = false
+        Task {
+            await findVM.applyPaging(
+                offset: documentOffsetDraft,
+                limit: documentLimitDraft,
+                database: db,
+                collection: col,
+                session: sessionViewModel
+            )
+        }
     }
 }

@@ -278,6 +278,34 @@ actor MongoService {
         return documents
     }
 
+    func countDocuments(
+        database: String,
+        collection: String,
+        filter: BSONDocument
+    ) async throws -> Int {
+        let client = try requireClient()
+        let command: BSONDocument = [
+            "count": .string(collection),
+            "query": .document(filter)
+        ]
+
+        let reply = try runCommand(client: client, database: database, command: command)
+        guard let countValue = reply["n"] else {
+            throw MongoServiceError.commandFailed("Unable to read document count.")
+        }
+
+        switch countValue {
+        case .int32(let value):
+            return Int(value)
+        case .int64(let value):
+            return Int(value)
+        case .double(let value):
+            return Int(value)
+        default:
+            throw MongoServiceError.commandFailed("Unexpected document count type.")
+        }
+    }
+
     func runAggregate(
         database: String,
         collection: String,

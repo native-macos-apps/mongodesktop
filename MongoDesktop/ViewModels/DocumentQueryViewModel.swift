@@ -18,6 +18,8 @@ final class DocumentQueryViewModel: ObservableObject {
 
     @Published var pageSize = 100
     @Published var currentPage = 0
+    @Published var offset = 0
+    @Published var totalDocuments = 0
     @Published var hasMore = false
 
     // MARK: - Results
@@ -71,17 +73,27 @@ final class DocumentQueryViewModel: ObservableObject {
 
     func resetPaging() {
         currentPage = 0
+        offset = 0
     }
 
     func nextPage(database: String, collection: String, session: DatabaseSessionViewModel) async {
         guard hasMore else { return }
         currentPage += 1
+        offset += pageSize
         await runFind(database: database, collection: collection, session: session)
     }
 
     func previousPage(database: String, collection: String, session: DatabaseSessionViewModel) async {
-        guard currentPage > 0 else { return }
-        currentPage -= 1
+        guard offset > 0 else { return }
+        offset = max(0, offset - pageSize)
+        currentPage = pageSize > 0 ? offset / pageSize : 0
+        await runFind(database: database, collection: collection, session: session)
+    }
+
+    func applyPaging(offset: Int, limit: Int, database: String, collection: String, session: DatabaseSessionViewModel) async {
+        pageSize = max(1, limit)
+        self.offset = max(0, offset)
+        currentPage = self.offset / pageSize
         await runFind(database: database, collection: collection, session: session)
     }
 
@@ -102,7 +114,12 @@ final class DocumentQueryViewModel: ObservableObject {
             let filter = try parseFilter(filterText)
             let sort = isAdvancedQuery ? try parseQueryOption(sortText) : nil
             let projection = isAdvancedQuery ? try parseQueryOption(projectionText) : nil
-            let skip = currentPage * pageSize
+            let skip = offset
+            let total = try await mongoService.countDocuments(
+                database: database,
+                collection: collection,
+                filter: filter
+            )
 
             let results = try await mongoService.findDocuments(
                 database: database,
@@ -115,7 +132,8 @@ final class DocumentQueryViewModel: ObservableObject {
             )
 
             self.documents = results
-            hasMore = results.count == pageSize
+            totalDocuments = total
+            hasMore = skip + results.count < total
             selectedRowIds = []
             let duration = Date().timeIntervalSince(start)
             lastQueryDuration = duration
@@ -151,6 +169,8 @@ final class DocumentQueryViewModel: ObservableObject {
         selectedRowIds = []
         hasMore = false
         currentPage = 0
+        offset = 0
+        totalDocuments = 0
         lastQueryDuration = nil
     }
 
