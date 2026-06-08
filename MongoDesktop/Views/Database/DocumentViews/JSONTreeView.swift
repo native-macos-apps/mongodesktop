@@ -32,20 +32,21 @@ struct JSONTreeView: View {
     }
 
     private var nodes: [JSONNode] {
-        document.map { JSONNode(key: $0.key, value: $0.value, timeZone: timeZone) }
+        JSONNode.rootNodes(for: document, timeZone: timeZone)
     }
 }
 
 // MARK: - JSONNode
 
 struct JSONNode: Identifiable {
-    let id = UUID()
+    let id: String
     let key: String?
     let value: String
     let rawValue: BSON
     let timeZone: TimeZone
 
-    init(key: String? = nil, value: BSON, timeZone: TimeZone) {
+    init(key: String? = nil, value: BSON, timeZone: TimeZone, parentID: String) {
+        self.id = Self.stableIdentifier(parentID: parentID, keyName: key ?? "")
         self.key = key
         self.rawValue = value
         self.timeZone = timeZone
@@ -56,6 +57,22 @@ struct JSONNode: Identifiable {
             self.value = "[ \(array.count) items ]"
         default:
             self.value = displayValue(value, timeZone: timeZone)
+        }
+    }
+
+    static func rootID(for document: BSONDocument) -> String {
+        String(describing: document["_id"] ?? .null)
+    }
+
+    static func rootNodes(for document: BSONDocument, timeZone: TimeZone) -> [JSONNode] {
+        let rootID = rootID(for: document)
+        return document.map { pair in
+            JSONNode(
+                key: pair.key,
+                value: pair.value,
+                timeZone: timeZone,
+                parentID: rootID
+            )
         }
     }
 
@@ -73,14 +90,37 @@ struct JSONNode: Identifiable {
     func makeChildren() -> [JSONNode] {
         switch rawValue {
         case .document(let doc):
-            return doc.map { JSONNode(key: $0.key, value: $0.value, timeZone: timeZone) }
+            return doc.map { pair in
+                JSONNode(
+                    key: pair.key,
+                    value: pair.value,
+                    timeZone: timeZone,
+                    parentID: id
+                )
+            }
         case .array(let array):
             return array.enumerated().map { index, item in
-                JSONNode(key: "[\(index)]", value: item, timeZone: timeZone)
+                let key = "[\(index)]"
+                return JSONNode(
+                    key: key,
+                    value: item,
+                    timeZone: timeZone,
+                    parentID: id
+                )
             }
         default:
             return []
         }
+    }
+
+    private static func stableIdentifier(parentID: String, keyName: String) -> String {
+        let value = parentID + keyName
+        var hash: UInt64 = 0xcbf29ce484222325
+        for byte in value.utf8 {
+            hash ^= UInt64(byte)
+            hash &*= 0x100000001b3
+        }
+        return String(format: "%016llx", hash)
     }
 }
 

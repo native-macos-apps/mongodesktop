@@ -50,18 +50,12 @@ struct DocumentJSONView: View {
     }
 
     private func wrapper(for document: BSONDocument, index: Int) -> JSONDocumentWrapper {
-        let id: String
-        if let rawId = document["_id"] {
-            id = "id-\(String(describing: rawId))"
-        } else {
-            id = "idx-\(index)"
-        }
-
+        let id = JSONNode.rootID(for: document)
         return JSONDocumentWrapper(
             id: id,
             index: index,
             document: document,
-            nodes: document.map { JSONNode(key: $0.key, value: $0.value, timeZone: timeZone) }
+            nodes: JSONNode.rootNodes(for: document, timeZone: timeZone)
         )
     }
 }
