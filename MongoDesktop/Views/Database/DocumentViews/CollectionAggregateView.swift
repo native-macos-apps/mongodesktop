@@ -122,13 +122,19 @@ struct CollectionAggregateView: View {
     }
 
     private var aggregateTableContent: some View {
-        DocumentTableView(
-            rows: aggregateVM.tableCache.rows,
-            columns: aggregateVM.tableCache.columns,
-            columnTypes: aggregateVM.tableCache.columnTypes,
+        let tableCache = aggregateVM.tableCache
+        let isPreparingTable = tableCache == nil && !aggregateVM.documents.isEmpty
+
+        return DocumentTableView(
+            rows: tableCache?.rows ?? [],
+            columns: tableCache?.columns ?? [],
+            columnTypes: tableCache?.columnTypes ?? [:],
             selection: $selection,
-            isLoading: false
+            isLoading: isPreparingTable
         )
+        .task(id: aggregateVM.tableCacheRequestID) {
+            await aggregateVM.prepareTableCache()
+        }
     }
 
     private var aggregateJSONContent: some View {

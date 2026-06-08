@@ -14,8 +14,10 @@ final class AggregateQueryViewModel: ObservableObject {
 
     @Published var documents: [BSONDocument] = [] {
         didSet {
-            tableCache = TableDataCache(documents: documents)
-            jsonCache = nil
+            tableCacheTask?.cancel()
+            tableCacheTask = nil
+            tableCacheGeneration += 1
+            tableCache = nil
         }
     }
     @Published var isLoading = false
@@ -24,9 +26,14 @@ final class AggregateQueryViewModel: ObservableObject {
 
     // MARK: - Cache
 
-    @Published var tableCache = TableDataCache(documents: [])
-    private var jsonCache: [JSONDocumentWrapper]?
-    private var jsonCacheTimeZone: TimeZone?
+    @Published private(set) var tableCache: TableDataCache?
+    private var tableCacheTask: Task<Void, Never>?
+    private var tableCacheGeneration = 0
+
+    // MARK: - Task Tracking
+
+    private var activeAggregateTask: Task<Void, Never>?
+    private var aggregateGeneration = 0
 
     // MARK: - Dependencies
 
@@ -38,28 +45,47 @@ final class AggregateQueryViewModel: ObservableObject {
 
     // MARK: - Cache Access
 
-    func getJSONCache(timeZone: TimeZone) -> [JSONDocumentWrapper] {
-        if let cache = jsonCache, jsonCacheTimeZone == timeZone {
-            return cache
+    var tableCacheRequestID: Int {
+        tableCacheGeneration
+    }
+
+    func prepareTableCache() async {
+        guard tableCache == nil, tableCacheTask == nil else { return }
+
+        let snapshot = documents
+        let generation = tableCacheGeneration
+        if snapshot.isEmpty {
+            tableCache = TableDataCache(documents: [])
+            return
         }
-        let cache = documents.enumerated().map { index, doc in
-            let id: String
-            if let rawId = doc["_id"] {
-                id = "id-\(String(describing: rawId))"
-            } else {
-                id = "idx-\(index)"
-            }
-            let nodes = doc.map { JSONNode(key: $0.key, value: $0.value, timeZone: timeZone) }
-            return JSONDocumentWrapper(id: id, index: index, document: doc, nodes: nodes)
+
+        let task = Task { [weak self] in
+            let cache = await Task.detached(priority: .userInitiated) {
+                TableDataCache(documents: snapshot)
+            }.value
+            guard !Task.isCancelled else { return }
+            await self?.applyTableCache(cache, generation: generation)
         }
-        self.jsonCache = cache
-        self.jsonCacheTimeZone = timeZone
-        return cache
+        tableCacheTask = task
+        await task.value
     }
 
     // MARK: - Run Aggregate
 
     func runAggregate(database: String, collection: String, session: DatabaseSessionViewModel) async {
+        activeAggregateTask?.cancel()
+        aggregateGeneration += 1
+        let generation = aggregateGeneration
+
+        let task = Task { [weak self, weak session] in
+            guard let self, let session else { return }
+            await self.performAggregate(database: database, collection: collection, session: session, generation: generation)
+        }
+        activeAggregateTask = task
+        await task.value
+    }
+
+    private func performAggregate(database: String, collection: String, session: DatabaseSessionViewModel, generation: Int) async {
         isLoading = true
         error = nil
         queryDuration = nil
@@ -74,6 +100,7 @@ final class AggregateQueryViewModel: ObservableObject {
                 collection: collection,
                 pipeline: pipeline
             )
+            guard isCurrentAggregate(generation), !Task.isCancelled else { return }
             self.documents = results
             let duration = Date().timeIntervalSince(start)
             self.queryDuration = duration
@@ -100,14 +127,24 @@ final class AggregateQueryViewModel: ObservableObject {
             )
         }
 
-        isLoading = false
+        if isCurrentAggregate(generation) {
+            isLoading = false
+            activeAggregateTask = nil
+        }
     }
 
     // MARK: - Clear
 
     func clear() {
+        activeAggregateTask?.cancel()
+        tableCacheTask?.cancel()
+        activeAggregateTask = nil
+        tableCacheTask = nil
+        aggregateGeneration += 1
+        tableCacheGeneration += 1
         documents = []
         error = nil
+        isLoading = false
         queryDuration = nil
     }
 
@@ -139,5 +176,15 @@ final class AggregateQueryViewModel: ObservableObject {
         }
 
         return pipelineDocs
+    }
+
+    private func applyTableCache(_ cache: TableDataCache, generation: Int) {
+        guard tableCacheGeneration == generation else { return }
+        tableCache = cache
+        tableCacheTask = nil
+    }
+
+    private func isCurrentAggregate(_ generation: Int) -> Bool {
+        aggregateGeneration == generation
     }
 }

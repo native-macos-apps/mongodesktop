@@ -42,24 +42,44 @@ struct JSONNode: Identifiable {
     let id = UUID()
     let key: String?
     let value: String
-    let children: [JSONNode]?
     let rawValue: BSON
+    let timeZone: TimeZone
 
     init(key: String? = nil, value: BSON, timeZone: TimeZone) {
         self.key = key
         self.rawValue = value
+        self.timeZone = timeZone
         switch value {
         case .document(let doc):
             self.value = "{ \(doc.count) fields }"
-            self.children = doc.map { JSONNode(key: $0.key, value: $0.value, timeZone: timeZone) }
         case .array(let array):
             self.value = "[ \(array.count) items ]"
-            self.children = array.enumerated().map { index, item in
+        default:
+            self.value = displayValue(value, timeZone: timeZone)
+        }
+    }
+
+    var hasChildren: Bool {
+        switch rawValue {
+        case .document(let doc):
+            return !doc.isEmpty
+        case .array(let array):
+            return !array.isEmpty
+        default:
+            return false
+        }
+    }
+
+    func makeChildren() -> [JSONNode] {
+        switch rawValue {
+        case .document(let doc):
+            return doc.map { JSONNode(key: $0.key, value: $0.value, timeZone: timeZone) }
+        case .array(let array):
+            return array.enumerated().map { index, item in
                 JSONNode(key: "[\(index)]", value: item, timeZone: timeZone)
             }
         default:
-            self.value = displayValue(value, timeZone: timeZone)
-            self.children = nil
+            return []
         }
     }
 }
@@ -70,6 +90,7 @@ struct JSONNodeView: View {
     let node: JSONNode
     let depth: Int
     @State private var isExpanded: Bool = false
+    @State private var loadedChildren: [JSONNode]? = nil
 
     var body: some View {
         VStack(alignment: .leading, spacing: 2) {
@@ -82,8 +103,8 @@ struct JSONNodeView: View {
                         .padding(.horizontal, 7)
                 }
 
-                if node.children != nil {
-                    Button(action: { withAnimation(.spring(duration: 0.2)) { isExpanded.toggle() } }) {
+                if node.hasChildren {
+                    Button(action: toggleExpansion) {
                         Image(systemName: isExpanded ? "chevron.down.circle.fill" : "chevron.right.circle.fill")
                             .font(.caption)
                             .foregroundStyle(Color.accentColor.opacity(0.7))
@@ -112,7 +133,7 @@ struct JSONNodeView: View {
             }
             .padding(.leading, CGFloat(depth) * 16)
 
-            if isExpanded, let children = node.children {
+            if isExpanded, let children = loadedChildren {
                 ForEach(children) { child in
                     JSONNodeView(node: child, depth: depth + 1)
                 }
@@ -121,7 +142,7 @@ struct JSONNodeView: View {
     }
 
     private var valueColor: Color {
-        if node.children != nil { return .secondary }
+        if node.hasChildren { return .secondary }
         switch node.rawValue {
         case .string: return Color(red: 0.8, green: 0.6, blue: 0.3)
         case .bool: return Color(red: 0.4, green: 0.85, blue: 0.5)
@@ -130,6 +151,16 @@ struct JSONNodeView: View {
         case .datetime, .objectID, .binary, .regex, .timestamp, .maxKey, .minKey:
             return .orange
         default: return .primary
+        }
+    }
+
+    private func toggleExpansion() {
+        if !isExpanded, loadedChildren == nil {
+            loadedChildren = node.makeChildren()
+        }
+
+        withAnimation(.spring(duration: 0.2)) {
+            isExpanded.toggle()
         }
     }
 }

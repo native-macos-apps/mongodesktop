@@ -144,15 +144,19 @@ struct CollectionDocumentView: View {
     }
 
     private var tableContent: some View {
-        let tableCache = findVM.getDocumentTableCache()
+        let tableCache = findVM.documentTableCache
+        let isPreparingTable = tableCache == nil && !findVM.documents.isEmpty
 
         return DocumentTableView(
-            rows: tableCache.rows,
-            columns: tableCache.columns,
-            columnTypes: tableCache.columnTypes,
+            rows: tableCache?.rows ?? [],
+            columns: tableCache?.columns ?? [],
+            columnTypes: tableCache?.columnTypes ?? [:],
             selection: $findVM.selectedRowIds,
-            isLoading: findVM.isLoading
+            isLoading: findVM.isLoading || isPreparingTable
         )
+        .task(id: findVM.tableCacheRequestID) {
+            await findVM.prepareDocumentTableCache()
+        }
     }
 
     private var jsonContent: some View {

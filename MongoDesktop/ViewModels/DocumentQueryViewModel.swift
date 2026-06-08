@@ -26,6 +26,9 @@ final class DocumentQueryViewModel: ObservableObject {
 
     @Published var documents: [BSONDocument] = [] {
         didSet {
+            tableCacheTask?.cancel()
+            tableCacheTask = nil
+            tableCacheGeneration += 1
             documentTableCache = nil
         }
     }
@@ -35,7 +38,14 @@ final class DocumentQueryViewModel: ObservableObject {
 
     // MARK: - Cache
 
-    private var documentTableCache: TableDataCache?
+    @Published private(set) var documentTableCache: TableDataCache?
+    private var tableCacheTask: Task<Void, Never>?
+    private var tableCacheGeneration = 0
+
+    // MARK: - Task Tracking
+
+    private var activeFindTask: Task<Void, Never>?
+    private var findGeneration = 0
 
     // MARK: - Dependencies
 
@@ -51,14 +61,29 @@ final class DocumentQueryViewModel: ObservableObject {
         documentTableCache?.columns ?? []
     }
 
-    func getDocumentTableCache() -> TableDataCache {
-        if let documentTableCache {
-            return documentTableCache
+    var tableCacheRequestID: Int {
+        tableCacheGeneration
+    }
+
+    func prepareDocumentTableCache() async {
+        guard documentTableCache == nil, tableCacheTask == nil else { return }
+
+        let snapshot = documents
+        let generation = tableCacheGeneration
+        if snapshot.isEmpty {
+            documentTableCache = TableDataCache(documents: [])
+            return
         }
 
-        let cache = TableDataCache(documents: documents)
-        documentTableCache = cache
-        return cache
+        let task = Task { [weak self] in
+            let cache = await Task.detached(priority: .userInitiated) {
+                TableDataCache(documents: snapshot)
+            }.value
+            guard !Task.isCancelled else { return }
+            await self?.applyDocumentTableCache(cache, generation: generation)
+        }
+        tableCacheTask = task
+        await task.value
     }
 
     // MARK: - Paging
@@ -92,6 +117,19 @@ final class DocumentQueryViewModel: ObservableObject {
     // MARK: - Run Find
 
     func runFind(database: String, collection: String, session: DatabaseSessionViewModel) async {
+        activeFindTask?.cancel()
+        findGeneration += 1
+        let generation = findGeneration
+
+        let task = Task { [weak self, weak session] in
+            guard let self, let session else { return }
+            await self.performFind(database: database, collection: collection, session: session, generation: generation)
+        }
+        activeFindTask = task
+        await task.value
+    }
+
+    private func performFind(database: String, collection: String, session: DatabaseSessionViewModel, generation: Int) async {
         isLoading = true
         session.lastError = nil
         lastQueryDuration = nil
@@ -112,6 +150,7 @@ final class DocumentQueryViewModel: ObservableObject {
                 collection: collection,
                 filter: filter
             )
+            guard isCurrentFind(generation), !Task.isCancelled else { return }
 
             let results = try await mongoService.findDocuments(
                 database: database,
@@ -122,6 +161,7 @@ final class DocumentQueryViewModel: ObservableObject {
                 limit: pageSize,
                 skip: skip
             )
+            guard isCurrentFind(generation), !Task.isCancelled else { return }
 
             self.documents = results
             totalDocuments = total
@@ -151,14 +191,24 @@ final class DocumentQueryViewModel: ObservableObject {
             )
         }
 
-        isLoading = false
+        if isCurrentFind(generation) {
+            isLoading = false
+            activeFindTask = nil
+        }
     }
 
     // MARK: - Clear
 
     func clear() {
+        activeFindTask?.cancel()
+        tableCacheTask?.cancel()
+        activeFindTask = nil
+        tableCacheTask = nil
+        findGeneration += 1
+        tableCacheGeneration += 1
         documents = []
         selectedRowIds = []
+        isLoading = false
         hasMore = false
         currentPage = 0
         offset = 0
@@ -184,5 +234,15 @@ final class DocumentQueryViewModel: ObservableObject {
         }
         let converted = BSONQueryParser.convertBSONToJSON(trimmed)
         return try BSONDocument(fromJSON: converted)
+    }
+
+    private func applyDocumentTableCache(_ cache: TableDataCache, generation: Int) {
+        guard tableCacheGeneration == generation else { return }
+        documentTableCache = cache
+        tableCacheTask = nil
+    }
+
+    private func isCurrentFind(_ generation: Int) -> Bool {
+        findGeneration == generation
     }
 }
