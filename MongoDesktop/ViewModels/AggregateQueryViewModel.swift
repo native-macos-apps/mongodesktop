@@ -14,9 +14,7 @@ final class AggregateQueryViewModel: ObservableObject {
 
     @Published var documents: [BSONDocument] = [] {
         didSet {
-            tableCacheTask?.cancel()
-            tableCacheTask = nil
-            tableCacheGeneration += 1
+            tableCacheController.invalidate()
             tableCache = nil
         }
     }
@@ -27,8 +25,7 @@ final class AggregateQueryViewModel: ObservableObject {
     // MARK: - Cache
 
     @Published private(set) var tableCache: TableDataCache?
-    private var tableCacheTask: Task<Void, Never>?
-    private var tableCacheGeneration = 0
+    private let tableCacheController = TableCacheController()
 
     // MARK: - Task Tracking
 
@@ -46,28 +43,14 @@ final class AggregateQueryViewModel: ObservableObject {
     // MARK: - Cache Access
 
     var tableCacheRequestID: Int {
-        tableCacheGeneration
+        tableCacheController.generation
     }
 
     func prepareTableCache() async {
-        guard tableCache == nil, tableCacheTask == nil else { return }
-
-        let snapshot = documents
-        let generation = tableCacheGeneration
-        if snapshot.isEmpty {
-            tableCache = TableDataCache(documents: [])
-            return
-        }
-
-        let task = Task { [weak self] in
-            let cache = await Task.detached(priority: .userInitiated) {
-                TableDataCache(documents: snapshot)
-            }.value
-            guard !Task.isCancelled else { return }
-            await self?.applyTableCache(cache, generation: generation)
-        }
-        tableCacheTask = task
-        await task.value
+        tableCache = await tableCacheController.prepareCache(
+            currentCache: tableCache,
+            documents: documents
+        )
     }
 
     // MARK: - Run Aggregate
@@ -94,7 +77,7 @@ final class AggregateQueryViewModel: ObservableObject {
         let pipelineLabel = pipelineText.trimmingCharacters(in: .whitespacesAndNewlines)
 
         do {
-            let pipeline = try parsePipeline(pipelineText)
+            let pipeline = try MongoQueryParsing.parsePipeline(pipelineText)
             let results = try await mongoService.runAggregate(
                 database: database,
                 collection: collection,
@@ -137,51 +120,13 @@ final class AggregateQueryViewModel: ObservableObject {
 
     func clear() {
         activeAggregateTask?.cancel()
-        tableCacheTask?.cancel()
         activeAggregateTask = nil
-        tableCacheTask = nil
         aggregateGeneration += 1
-        tableCacheGeneration += 1
+        tableCacheController.invalidate()
         documents = []
         error = nil
         isLoading = false
         queryDuration = nil
-    }
-
-    // MARK: - Parsing
-
-    private func parsePipeline(_ text: String) throws -> [BSONDocument] {
-        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        if trimmed.isEmpty || trimmed == "[]" {
-            return []
-        }
-
-        let converted = BSONQueryParser.convertBSONToJSON(trimmed)
-
-        guard let data = converted.data(using: .utf8) else {
-            throw MongoServiceError.bsonError("Invalid encoding in pipeline text.")
-        }
-
-        let jsonObject = try JSONSerialization.jsonObject(with: data, options: [])
-        guard let jsonArray = jsonObject as? [[String: Any]] else {
-            throw MongoServiceError.bsonError("Pipeline must be a JSON Array of objects.")
-        }
-
-        var pipelineDocs: [BSONDocument] = []
-        for obj in jsonArray {
-            let objData = try JSONSerialization.data(withJSONObject: obj, options: [])
-            let jsonString = String(data: objData, encoding: .utf8) ?? "{}"
-            let doc = try BSONDocument(fromJSON: jsonString)
-            pipelineDocs.append(doc)
-        }
-
-        return pipelineDocs
-    }
-
-    private func applyTableCache(_ cache: TableDataCache, generation: Int) {
-        guard tableCacheGeneration == generation else { return }
-        tableCache = cache
-        tableCacheTask = nil
     }
 
     private func isCurrentAggregate(_ generation: Int) -> Bool {

@@ -26,9 +26,7 @@ final class DocumentQueryViewModel: ObservableObject {
 
     @Published var documents: [BSONDocument] = [] {
         didSet {
-            tableCacheTask?.cancel()
-            tableCacheTask = nil
-            tableCacheGeneration += 1
+            tableCacheController.invalidate()
             documentTableCache = nil
         }
     }
@@ -39,8 +37,7 @@ final class DocumentQueryViewModel: ObservableObject {
     // MARK: - Cache
 
     @Published private(set) var documentTableCache: TableDataCache?
-    private var tableCacheTask: Task<Void, Never>?
-    private var tableCacheGeneration = 0
+    private let tableCacheController = TableCacheController()
 
     // MARK: - Task Tracking
 
@@ -62,28 +59,14 @@ final class DocumentQueryViewModel: ObservableObject {
     }
 
     var tableCacheRequestID: Int {
-        tableCacheGeneration
+        tableCacheController.generation
     }
 
     func prepareDocumentTableCache() async {
-        guard documentTableCache == nil, tableCacheTask == nil else { return }
-
-        let snapshot = documents
-        let generation = tableCacheGeneration
-        if snapshot.isEmpty {
-            documentTableCache = TableDataCache(documents: [])
-            return
-        }
-
-        let task = Task { [weak self] in
-            let cache = await Task.detached(priority: .userInitiated) {
-                TableDataCache(documents: snapshot)
-            }.value
-            guard !Task.isCancelled else { return }
-            await self?.applyDocumentTableCache(cache, generation: generation)
-        }
-        tableCacheTask = task
-        await task.value
+        documentTableCache = await tableCacheController.prepareCache(
+            currentCache: documentTableCache,
+            documents: documents
+        )
     }
 
     // MARK: - Paging
@@ -141,9 +124,9 @@ final class DocumentQueryViewModel: ObservableObject {
         }
 
         do {
-            let filter = try parseFilter(filterText)
-            let sort = isAdvancedQuery ? try parseQueryOption(sortText) : nil
-            let projection = isAdvancedQuery ? try parseQueryOption(projectionText) : nil
+            let filter = try MongoQueryParsing.parseFilter(filterText)
+            let sort = isAdvancedQuery ? try MongoQueryParsing.parseQueryOption(sortText) : nil
+            let projection = isAdvancedQuery ? try MongoQueryParsing.parseQueryOption(projectionText) : nil
             let skip = offset
             let total = try await mongoService.countDocuments(
                 database: database,
@@ -201,11 +184,9 @@ final class DocumentQueryViewModel: ObservableObject {
 
     func clear() {
         activeFindTask?.cancel()
-        tableCacheTask?.cancel()
         activeFindTask = nil
-        tableCacheTask = nil
         findGeneration += 1
-        tableCacheGeneration += 1
+        tableCacheController.invalidate()
         documents = []
         selectedRowIds = []
         isLoading = false
@@ -214,32 +195,6 @@ final class DocumentQueryViewModel: ObservableObject {
         offset = 0
         totalDocuments = 0
         lastQueryDuration = nil
-    }
-
-    // MARK: - Parsing
-
-    private func parseFilter(_ text: String) throws -> BSONDocument {
-        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        if trimmed.isEmpty || trimmed == "{}" {
-            return BSONDocument()
-        }
-        let converted = BSONQueryParser.convertBSONToJSON(trimmed)
-        return try BSONDocument(fromJSON: converted)
-    }
-
-    private func parseQueryOption(_ text: String) throws -> BSONDocument? {
-        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        if trimmed.isEmpty || trimmed == "{}" {
-            return nil
-        }
-        let converted = BSONQueryParser.convertBSONToJSON(trimmed)
-        return try BSONDocument(fromJSON: converted)
-    }
-
-    private func applyDocumentTableCache(_ cache: TableDataCache, generation: Int) {
-        guard tableCacheGeneration == generation else { return }
-        documentTableCache = cache
-        tableCacheTask = nil
     }
 
     private func isCurrentFind(_ generation: Int) -> Bool {
