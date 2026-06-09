@@ -7,6 +7,7 @@ struct DocumentJSONView: View {
     let documents: [BSONDocument]
     let timeZone: TimeZone
     let isLoading: Bool
+    @State private var selectedNodeID: String? = nil
 
     var body: some View {
         if isLoading && documents.isEmpty {
@@ -31,10 +32,17 @@ struct DocumentJSONView: View {
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 10) {
                     ForEach(documents.indices, id: \.self) { index in
-                        JSONDocumentCard(wrapper: wrapper(for: documents[index], index: index))
+                        JSONDocumentCard(wrapper: wrapper(for: documents[index], index: index), selectedNodeID: $selectedNodeID)
                     }
                 }
                 .padding(16)
+            }
+            .background {
+                Color.clear
+                    .contentShape(Rectangle())
+                    .onTapGesture {
+                        selectedNodeID = nil
+                    }
             }
             .overlay {
                 if isLoading {
@@ -64,6 +72,7 @@ struct DocumentJSONView: View {
 
 struct JSONDocumentCard: View {
     let wrapper: JSONDocumentWrapper
+    @Binding var selectedNodeID: String?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -71,12 +80,19 @@ struct JSONDocumentCard: View {
 
             VStack(alignment: .leading, spacing: 3) {
                 ForEach(wrapper.nodes) { node in
-                    JSONNodeView(node: node, depth: 0)
+                    JSONNodeView(node: node, depth: 0, selectedNodeID: $selectedNodeID)
                 }
             }
             .padding(12)
         }
-        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+        .background {
+            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                .fill(.regularMaterial)
+                .contentShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+                .onTapGesture {
+                    selectedNodeID = nil
+                }
+        }
         .overlay(
             RoundedRectangle(cornerRadius: 10, style: .continuous)
                 .stroke(Color.primary.opacity(0.07), lineWidth: 1)
@@ -96,5 +112,14 @@ struct JSONDocumentCard: View {
                 Label("Copy JSON", systemImage: "curlybraces")
             }
         }
+    }
+}
+
+struct JSONDocumentCardContainer: View {
+    let wrapper: JSONDocumentWrapper
+    @State private var selectedNodeID: String? = nil
+
+    var body: some View {
+        JSONDocumentCard(wrapper: wrapper, selectedNodeID: $selectedNodeID)
     }
 }

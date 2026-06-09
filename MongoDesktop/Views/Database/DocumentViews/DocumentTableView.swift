@@ -120,7 +120,7 @@ struct DocumentTableView: View {
                             document: row.document,
                             nodes: JSONNode.rootNodes(for: row.document, timeZone: globalSettings.displayTimeZone)
                         )
-                        JSONDocumentCard(wrapper: wrapper)
+                        JSONDocumentCardContainer(wrapper: wrapper)
                             .padding()
                     }
                     .navigationTitle("Document Detail")

@@ -6,14 +6,22 @@ import SwiftBSON
 struct JSONTreeView: View {
     let document: BSONDocument
     let timeZone: TimeZone
+    @State private var selectedNodeID: String? = nil
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
             ForEach(nodes) { node in
-                JSONNodeView(node: node, depth: 0)
+                JSONNodeView(node: node, depth: 0, selectedNodeID: $selectedNodeID)
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
+        .background {
+            Color.clear
+                .contentShape(Rectangle())
+                .onTapGesture {
+                    selectedNodeID = nil
+                }
+        }
         .contextMenu {
             Button {
                 NSPasteboard.general.clearContents()
@@ -87,6 +95,17 @@ struct JSONNode: Identifiable {
         }
     }
 
+    var copyValue: String {
+        switch rawValue {
+        case .document(let doc):
+            return doc.toRelaxedExtendedJSONString()
+        case .array:
+            return String(describing: rawValue)
+        default:
+            return displayValue(rawValue, timeZone: timeZone)
+        }
+    }
+
     func makeChildren() -> [JSONNode] {
         switch rawValue {
         case .document(let doc):
@@ -129,56 +148,71 @@ struct JSONNode: Identifiable {
 struct JSONNodeView: View {
     let node: JSONNode
     let depth: Int
+    @Binding var selectedNodeID: String?
     @State private var isExpanded: Bool = false
     @State private var loadedChildren: [JSONNode]? = nil
 
     var body: some View {
         VStack(alignment: .leading, spacing: 2) {
             HStack(spacing: 6) {
-                // Indent
-                if depth > 0 {
-                    Rectangle()
-                        .fill(Color.primary.opacity(0.1))
-                        .frame(width: 1)
-                        .padding(.horizontal, 7)
-                }
-
                 if node.hasChildren {
                     Button(action: toggleExpansion) {
-                        Image(systemName: isExpanded ? "chevron.down.circle.fill" : "chevron.right.circle.fill")
-                            .font(.caption)
-                            .foregroundStyle(Color.accentColor.opacity(0.7))
+                        Image(systemName: isExpanded ? "chevron.down" : "chevron.right")
+                            .font(.caption2.weight(.semibold))
+                            .foregroundStyle(Color.accentColor.opacity(0.8))
+                            .frame(width: 12, height: 14)
                     }
                     .buttonStyle(.plain)
                 } else {
-                    Circle()
-                        .fill(Color.primary.opacity(0.2))
-                        .frame(width: 5, height: 5)
-                        .padding(.horizontal, 4)
+                    Spacer()
+                        .frame(width: 12, height: 14)
                 }
 
-                if let key = node.key {
-                    Text("\(key):")
-                        .font(.system(.callout, design: .monospaced))
-                        .foregroundStyle(Color(red: 0.4, green: 0.7, blue: 1.0))
-                        .textSelection(.enabled)
-                        .lineLimit(1)
-                }
-
-                Text(node.value)
+                rowLabel
                     .font(.system(.callout, design: .monospaced))
-                    .foregroundStyle(valueColor)
-                    .textSelection(.enabled)
                     .lineLimit(1)
             }
             .padding(.leading, CGFloat(depth) * 16)
+            .padding(.vertical, 1)
+            .padding(.trailing, 6)
+            .background(isSelected ? Color.accentColor.opacity(0.16) : Color.clear, in: RoundedRectangle(cornerRadius: 4, style: .continuous))
+            .contentShape(Rectangle())
+            .onTapGesture {
+                selectedNodeID = isSelected ? nil : node.id
+            }
+            .contextMenu {
+                if let key = node.key {
+                    Button {
+                        copyToPasteboard(key)
+                    } label: {
+                        Label("Copy Key", systemImage: "key")
+                    }
+                }
+
+                Button {
+                    copyToPasteboard(node.copyValue)
+                } label: {
+                    Label("Copy Value", systemImage: "doc.on.doc")
+                }
+            }
 
             if isExpanded, let children = loadedChildren {
                 ForEach(children) { child in
-                    JSONNodeView(node: child, depth: depth + 1)
+                    JSONNodeView(node: child, depth: depth + 1, selectedNodeID: $selectedNodeID)
                 }
             }
         }
+    }
+
+    private var isSelected: Bool {
+        selectedNodeID == node.id
+    }
+
+    private var rowLabel: Text {
+        let valueText = Text(node.value).foregroundStyle(valueColor)
+        guard let key = node.key else { return valueText }
+        return Text("\(key): ")
+            .foregroundStyle(Color(red: 0.4, green: 0.7, blue: 1.0)) + valueText
     }
 
     private var valueColor: Color {
@@ -202,5 +236,11 @@ struct JSONNodeView: View {
         withAnimation(.spring(duration: 0.2)) {
             isExpanded.toggle()
         }
+    }
+
+    private func copyToPasteboard(_ value: String) {
+        selectedNodeID = node.id
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(value, forType: .string)
     }
 }
