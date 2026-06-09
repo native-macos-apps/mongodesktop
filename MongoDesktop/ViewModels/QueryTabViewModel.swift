@@ -58,6 +58,17 @@ final class QueryTabViewModel: ObservableObject {
         }
     }
 
+    func openCollection(database: String, collection: String, session: DatabaseSessionViewModel) {
+        configure(database: database, collection: collection)
+        session.selectCollection(database: database, collection: collection)
+        loadInitialDocuments(database: database, collection: collection, session: session)
+    }
+
+    func loadInitialDocumentsIfPossible(session: DatabaseSessionViewModel) {
+        guard let databaseName, let collectionName else { return }
+        loadInitialDocuments(database: databaseName, collection: collectionName, session: session)
+    }
+
     func clearSelection() {
         databaseName = nil
         collectionName = nil
@@ -67,6 +78,14 @@ final class QueryTabViewModel: ObservableObject {
         find.clear()
         aggregate.clear()
         index.clear()
+    }
+
+    private func loadInitialDocuments(database: String, collection: String, session: DatabaseSessionViewModel) {
+        find.isLoading = true
+        find.documents = []
+        Task { [find] in
+            await find.runFind(database: database, collection: collection, session: session)
+        }
     }
 }
 

@@ -26,12 +26,7 @@ final class DatabaseWindowViewModel: ObservableObject {
         let tab = Tab(id: UUID(), viewModel: viewModel)
         tabs.append(tab)
         selectedTabId = tab.id
-
-        if let database = viewModel.databaseName, let collection = viewModel.collectionName {
-            viewModel.find.isLoading = true
-            viewModel.find.documents = []
-            Task { await viewModel.find.runFind(database: database, collection: collection, session: session) }
-        }
+        viewModel.loadInitialDocumentsIfPossible(session: session)
     }
 
     func openTab(database: String, collection: String, session: DatabaseSessionViewModel) {
@@ -47,24 +42,16 @@ final class DatabaseWindowViewModel: ObservableObject {
            let index = tabs.firstIndex(where: { $0.id == selectedTabId }),
            tabs[index].viewModel.collectionName == nil {
             let viewModel = tabs[index].viewModel
-            viewModel.configure(database: database, collection: collection)
-            session.selectCollection(database: database, collection: collection)
-            viewModel.find.isLoading = true
-            viewModel.find.documents = []
-            Task { await viewModel.find.runFind(database: database, collection: collection, session: session) }
+            viewModel.openCollection(database: database, collection: collection, session: session)
             return
         }
 
         let viewModel = QueryTabViewModel()
-        viewModel.configure(database: database, collection: collection)
-        viewModel.find.isLoading = true
-        viewModel.find.documents = []
+        viewModel.openCollection(database: database, collection: collection, session: session)
 
         let tab = Tab(id: UUID(), viewModel: viewModel)
         tabs.append(tab)
         selectedTabId = tab.id
-        session.selectCollection(database: database, collection: collection)
-        Task { await viewModel.find.runFind(database: database, collection: collection, session: session) }
     }
 
     func selectTab(_ id: UUID, session: DatabaseSessionViewModel) {
