@@ -40,7 +40,7 @@ MongoDesktop uses a modern Swift architecture:
 
 1. Clone the repository:
    ```bash
-   git clone https://github.com/yourusername/MongoDesktop.git
+   git clone git@github.com:native-macos-apps/mongodesktop.git
    ```
 2. Open `MongoDesktop.xcodeproj` in Xcode.
 3. Build and Run (**Cmd + R**).

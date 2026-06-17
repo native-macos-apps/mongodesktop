@@ -40,7 +40,7 @@ MongoDesktop sử dụng kiến trúc Swift hiện đại:
 
 1. Clone repository:
    ```bash
-   git clone https://github.com/yourusername/MongoDesktop.git
+   git@github.com:native-macos-apps/mongodesktop.git
    ```
 2. Mở `MongoDesktop.xcodeproj` trong Xcode.
 3. Build và Chạy (**Cmd + R**).
