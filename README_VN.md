@@ -4,7 +4,11 @@
 
 Một ứng dụng khách (client) MongoDB native, nhẹ nhàng cho hệ điều hành macOS, được xây dựng bằng SwiftUI và MongoDB C Driver.
 
-![App Screenshot](https://via.placeholder.com/800x450?text=MongoDesktop+Preview)
+## Ảnh Chụp Màn Hình
+
+| | | |
+|---|---|---|
+| <img width="267" alt="Screenshot 2026-06-17 at 17 20 33" src="https://github.com/user-attachments/assets/27e87ff5-9618-4dbc-b1e5-ee464c02c62a" /> | <img width="437" alt="Screenshot 2026-06-17 at 17 21 49" src="https://github.com/user-attachments/assets/f1d657c1-8b3e-42ff-93c6-870bccb2a6a3" /> | <img width="437" alt="Screenshot 2026-06-17 at 17 21 58" src="https://github.com/user-attachments/assets/2bdc2b23-3270-4187-aa61-48aff67c2810" /> |
 
 ## Các Tính Năng Chính
 
