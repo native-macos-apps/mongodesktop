@@ -14,13 +14,25 @@ struct DocumentTableView: View {
     let columnTypes: [String: String]
     @Binding var selection: Set<String>
     let isLoading: Bool
+    let onEdit: (BSONDocument) -> Void
+    let onDelete: ([BSONDocument]) -> Void
 
-    init(rows: [DocumentRow], columns: [String], columnTypes: [String: String], selection: Binding<Set<String>>, isLoading: Bool) {
+    init(
+        rows: [DocumentRow],
+        columns: [String],
+        columnTypes: [String: String],
+        selection: Binding<Set<String>>,
+        isLoading: Bool,
+        onEdit: @escaping (BSONDocument) -> Void = { _ in },
+        onDelete: @escaping ([BSONDocument]) -> Void = { _ in }
+    ) {
         self.rows = rows
         self.columns = columns
         self.columnTypes = columnTypes
         self._selection = selection
         self.isLoading = isLoading
+        self.onEdit = onEdit
+        self.onDelete = onDelete
     }
 
     var body: some View {
@@ -66,6 +78,27 @@ struct DocumentTableView: View {
                         Label("View Document Detail", systemImage: "doc.text.magnifyingglass")
                     }
                     
+                    Divider()
+
+                    Button {
+                        onEdit(row.document)
+                    } label: {
+                        Label("Edit Document", systemImage: "pencil")
+                    }
+
+                    Button(role: .destructive) {
+                        let selectedDocs = rows
+                            .filter { localSelection.contains($0.id) }
+                            .map(\.document)
+                        if !selectedDocs.isEmpty {
+                            onDelete(selectedDocs)
+                        } else {
+                            onDelete([row.document])
+                        }
+                    } label: {
+                        Label(localSelection.count > 1 ? "Delete Selected Documents (\(localSelection.count))" : "Delete Document", systemImage: "trash")
+                    }
+
                     Divider()
                     
                     Button {

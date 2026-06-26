@@ -4,6 +4,37 @@ import NIOPosix
 @preconcurrency import NIOSSH
 import CryptoKit
 
+final class SSHTunnelDebugLog {
+    static let shared = SSHTunnelDebugLog()
+
+    private let lock = NSLock()
+    private var lines: [String] = []
+
+    private init() {}
+
+    func append(_ message: String) {
+        lock.lock()
+        lines.append(message)
+        if lines.count > 300 {
+            lines.removeFirst(lines.count - 300)
+        }
+        lock.unlock()
+        print(message)
+    }
+
+    func drain() -> [String] {
+        lock.lock()
+        defer { lock.unlock() }
+        let current = lines
+        lines.removeAll()
+        return current
+    }
+}
+
+private func sshTunnelLog(_ message: String) {
+    SSHTunnelDebugLog.shared.append(message)
+}
+
 // MARK: - SSHTunnelError
 
 enum SSHTunnelError: LocalizedError {
@@ -24,6 +55,18 @@ enum SSHTunnelError: LocalizedError {
     }
 }
 
+struct SSHForwardTarget: Hashable {
+    let host: String
+    let port: Int
+}
+
+struct SSHLocalForward: Hashable {
+    let remoteHost: String
+    let remotePort: Int
+    let localHost: String
+    let localPort: Int
+}
+
 // MARK: - SSHTunnelService
 
 actor SSHTunnelService {
@@ -33,6 +76,7 @@ actor SSHTunnelService {
     private var group: MultiThreadedEventLoopGroup?
     private var sshChannel: Channel?
     private var socksServerChannel: Channel?
+    private var localForwardChannels: [Channel] = []
 
     // MARK: - Public API
 
@@ -67,7 +111,44 @@ actor SSHTunnelService {
         }
     }
 
+    func startLocalForwarding(config: SSHTunnelConfig, targets: [SSHForwardTarget]) async throws -> [SSHLocalForward] {
+        await stopTunnel()
+
+        guard !targets.isEmpty else {
+            throw SSHTunnelError.configInvalid("No MongoDB hosts were resolved for SSH forwarding")
+        }
+
+        let group = MultiThreadedEventLoopGroup(numberOfThreads: 1)
+        self.group = group
+
+        do {
+            let sshChannel = try await connectSSH(config: config, on: group)
+            self.sshChannel = sshChannel
+
+            var forwards: [SSHLocalForward] = []
+            for target in targets {
+                let localPort = try await startLocalForwardServer(sshChannel: sshChannel, target: target, on: group)
+                forwards.append(
+                    SSHLocalForward(
+                        remoteHost: target.host,
+                        remotePort: target.port,
+                        localHost: "127.0.0.1",
+                        localPort: localPort
+                    )
+                )
+            }
+            return forwards
+        } catch {
+            await stopTunnel()
+            throw error
+        }
+    }
+
     func stopTunnel() async {
+        for channel in localForwardChannels {
+            try? await channel.close()
+        }
+        localForwardChannels = []
         try? await socksServerChannel?.close()
         socksServerChannel = nil
         try? await sshChannel?.close()
@@ -140,6 +221,23 @@ actor SSHTunnelService {
         let serverChannel = try await bootstrap.bind(host: "127.0.0.1", port: 0).get()
         self.socksServerChannel = serverChannel
         
+        return serverChannel.localAddress?.port ?? 0
+    }
+
+    private func startLocalForwardServer(
+        sshChannel: Channel,
+        target: SSHForwardTarget,
+        on group: EventLoopGroup
+    ) async throws -> Int {
+        let bootstrap = ServerBootstrap(group: group)
+            .serverChannelOption(ChannelOptions.socket(SocketOptionLevel(SOL_SOCKET), SO_REUSEADDR), value: 1)
+            .childChannelInitializer { channel in
+                channel.pipeline.addHandler(LocalForwardHandler(sshChannel: sshChannel, target: target))
+            }
+
+        let serverChannel = try await bootstrap.bind(host: "127.0.0.1", port: 0).get()
+        localForwardChannels.append(serverChannel)
+
         return serverChannel.localAddress?.port ?? 0
     }
 
@@ -309,6 +407,120 @@ private struct SSHAuthenticator: NIOSSHClientUserAuthenticationDelegate {
     }
 }
 
+// MARK: - Local Forward Handler
+
+private final class LocalForwardHandler: ChannelInboundHandler {
+    typealias InboundIn = ByteBuffer
+
+    enum State { case idle, connecting, connected }
+
+    private let sshChannel: Channel
+    private let target: SSHForwardTarget
+    private var state: State = .idle
+    private var remoteChannel: Channel?
+    private var pendingData: ByteBuffer?
+
+    init(sshChannel: Channel, target: SSHForwardTarget) {
+        self.sshChannel = sshChannel
+        self.target = target
+    }
+
+    func channelActive(context: ChannelHandlerContext) {
+        state = .connecting
+
+        let promise = sshChannel.eventLoop.makePromise(of: Channel.self)
+        let localChannel = context.channel
+        let originatorAddress = context.remoteAddress ?? context.localAddress!
+
+        sshChannel.pipeline.handler(type: NIOSSHHandler.self).whenSuccess { handler in
+            sshTunnelLog("[SSHForward] Requesting directTCPIP to \(self.target.host):\(self.target.port)")
+            handler.createChannel(
+                promise,
+                channelType: .directTCPIP(
+                    .init(
+                        targetHost: self.target.host,
+                        targetPort: self.target.port,
+                        originatorAddress: originatorAddress
+                    )
+                )
+            ) { channel, _ in
+                sshTunnelLog("[SSHForward] directTCPIP channel created for \(self.target.host):\(self.target.port)")
+                self.remoteChannel = channel
+                return channel.pipeline.addHandler(SSHToLocalBridge(localChannel: localChannel) {
+                    localChannel.eventLoop.execute {
+                        self.markConnectedAndFlush(remoteChannel: channel)
+                    }
+                }).map {
+                    localChannel.eventLoop.execute {
+                        self.markConnectedAndFlush(remoteChannel: channel)
+                    }
+                }
+            }
+        }
+
+        promise.futureResult.whenSuccess { channel in
+            localChannel.eventLoop.execute {
+                self.markConnectedAndFlush(remoteChannel: channel)
+            }
+        }
+
+        promise.futureResult.whenFailure { error in
+            localChannel.eventLoop.execute {
+                sshTunnelLog("[SSHForward] directTCPIP failed for \(self.target.host):\(self.target.port): \(error)")
+                localChannel.close(promise: nil)
+            }
+        }
+    }
+
+    func channelRead(context: ChannelHandlerContext, data: NIOAny) {
+        var buffer = unwrapInboundIn(data)
+
+        switch state {
+        case .idle, .connecting:
+            sshTunnelLog("[SSHForward] Buffering \(buffer.readableBytes) bytes for \(target.host):\(target.port)")
+            if pendingData == nil {
+                pendingData = buffer
+            } else {
+                pendingData!.writeBuffer(&buffer)
+            }
+        case .connected:
+            sshTunnelLog("[SSHForward] Forwarding \(buffer.readableBytes) bytes to \(target.host):\(target.port)")
+            let sshData = SSHChannelData(type: .channel, data: .byteBuffer(buffer))
+            remoteChannel?.eventLoop.execute {
+                self.remoteChannel?.writeAndFlush(sshData).whenFailure { error in
+                    sshTunnelLog("[SSHForward] Write to \(self.target.host):\(self.target.port) failed: \(error)")
+                }
+            }
+        }
+    }
+
+    func channelInactive(context: ChannelHandlerContext) {
+        remoteChannel?.eventLoop.execute {
+            self.remoteChannel?.close(promise: nil)
+        }
+    }
+
+    func errorCaught(context: ChannelHandlerContext, error: Error) {
+        sshTunnelLog("[SSHForward] Error: \(error)")
+        context.close(promise: nil)
+    }
+
+    private func markConnectedAndFlush(remoteChannel channel: Channel) {
+        guard state != .connected else { return }
+        state = .connected
+
+        guard let pending = pendingData else { return }
+        sshTunnelLog("[SSHForward] Forwarding \(pending.readableBytes) buffered bytes to \(target.host):\(target.port)")
+        channel.eventLoop.execute {
+            let sshData = SSHChannelData(type: .channel, data: .byteBuffer(pending))
+            channel.writeAndFlush(sshData).whenFailure { error in
+                sshTunnelLog("[SSHForward] Buffered write to \(self.target.host):\(self.target.port) failed: \(error)")
+            }
+        }
+        pendingData = nil
+    }
+}
+
 // MARK: - SOCKS5 Handler
 
 private final class SOCKS5Handler: ChannelInboundHandler {
@@ -378,12 +590,12 @@ private final class SOCKS5Handler: ChannelInboundHandler {
             state = .connecting
             let promise = sshChannel.eventLoop.makePromise(of: Channel.self)
             let localChannel = context.channel
-            let originatorAddress = context.localAddress!
+            let originatorAddress = context.remoteAddress ?? context.localAddress!
             
             sshChannel.pipeline.handler(type: NIOSSHHandler.self).whenSuccess { handler in
-                print("[SOCKS5] Requesting directTCPIP to \(host):\(port)")
+                sshTunnelLog("[SOCKS5] Requesting directTCPIP to \(host):\(port)")
                 handler.createChannel(promise, channelType: .directTCPIP(.init(targetHost: host, targetPort: Int(port), originatorAddress: originatorAddress))) { channel, _ in
-                    print("[SOCKS5] directTCPIP channel created successfully")
+                    sshTunnelLog("[SOCKS5] directTCPIP channel created successfully")
                     self.remoteChannel = channel
                     return channel.pipeline.addHandler(SSHToLocalBridge(localChannel: localChannel))
                 }
@@ -391,7 +603,7 @@ private final class SOCKS5Handler: ChannelInboundHandler {
             
             promise.futureResult.whenSuccess { channel in
                 localChannel.eventLoop.execute {
-                    print("[SOCKS5] directTCPIP channel active, sending success to client")
+                    sshTunnelLog("[SOCKS5] directTCPIP channel active, sending success to client")
                     self.state = .connected
                     var res = localChannel.allocator.buffer(capacity: 10)
                     res.writeBytes([0x05, 0x00, 0x00, 0x01, 0, 0, 0, 0, 0, 0])
@@ -399,9 +611,11 @@ private final class SOCKS5Handler: ChannelInboundHandler {
                     
                     // Forward any pending data
                     if let pending = self.pendingData {
-                        print("[SOCKS5] Forwarding \(pending.readableBytes) bytes of pending data to SSH")
-                        let sshData = SSHChannelData(type: .channel, data: .byteBuffer(pending))
-                        channel.writeAndFlush(sshData, promise: nil)
+                        sshTunnelLog("[SOCKS5] Forwarding \(pending.readableBytes) bytes of pending data to SSH")
+                        channel.eventLoop.execute {
+                            let sshData = SSHChannelData(type: .channel, data: .byteBuffer(pending))
+                            channel.writeAndFlush(sshData, promise: nil)
+                        }
                         self.pendingData = nil
                     }
                 }
@@ -409,7 +623,7 @@ private final class SOCKS5Handler: ChannelInboundHandler {
             
             promise.futureResult.whenFailure { error in
                 localChannel.eventLoop.execute {
-                    print("[SOCKS5] directTCPIP channel failed: \(error)")
+                    sshTunnelLog("[SOCKS5] directTCPIP channel failed: \(error)")
                     var res = localChannel.allocator.buffer(capacity: 10)
                     res.writeBytes([0x05, 0x01, 0x00, 0x01, 0, 0, 0, 0, 0, 0])
                     localChannel.writeAndFlush(res, promise: nil)
@@ -428,19 +642,23 @@ private final class SOCKS5Handler: ChannelInboundHandler {
             
         case .connected:
             // Log payload
-            print("[SOCKS5] Forwarding \(buffer.readableBytes) bytes to SSH")
+            sshTunnelLog("[SOCKS5] Forwarding \(buffer.readableBytes) bytes to SSH")
             let sshData = SSHChannelData(type: .channel, data: .byteBuffer(buffer))
-            remoteChannel?.writeAndFlush(sshData, promise: nil)
+            remoteChannel?.eventLoop.execute {
+                self.remoteChannel?.writeAndFlush(sshData, promise: nil)
+            }
         }
     }
     
     func channelInactive(context: ChannelHandlerContext) {
-        print("[SOCKS5] Local channel inactive")
-        remoteChannel?.close(promise: nil)
+        sshTunnelLog("[SOCKS5] Local channel inactive")
+        remoteChannel?.eventLoop.execute {
+            self.remoteChannel?.close(promise: nil)
+        }
     }
     
     func errorCaught(context: ChannelHandlerContext, error: Error) {
-        print("[SOCKS5] Error: \(error)")
+        sshTunnelLog("[SOCKS5] Error: \(error)")
         context.close(promise: nil)
     }
 }
@@ -448,18 +666,33 @@ private final class SOCKS5Handler: ChannelInboundHandler {
 private final class SSHToLocalBridge: ChannelInboundHandler {
     typealias InboundIn = SSHChannelData
     private let localChannel: Channel
+    private let onActive: (() -> Void)?
 
-    init(localChannel: Channel) { self.localChannel = localChannel }
+    init(localChannel: Channel, onActive: (() -> Void)? = nil) {
+        self.localChannel = localChannel
+        self.onActive = onActive
+    }
+
+    func handlerAdded(context: ChannelHandlerContext) {
+        if context.channel.isActive {
+            sshTunnelLog("[SSHBridge] SSH child channel already active")
+            onActive?()
+        }
+    }
 
     func channelActive(context: ChannelHandlerContext) {
+        sshTunnelLog("[SSHBridge] SSH child channel active")
+        onActive?()
         context.read()
     }
 
     func channelRead(context: ChannelHandlerContext, data: NIOAny) {
         let sshData = self.unwrapInboundIn(data)
         if case .byteBuffer(let buffer) = sshData.data {
-            print("[SSHBridge] Received \(buffer.readableBytes) bytes from SSH")
-            localChannel.writeAndFlush(buffer, promise: nil)
+            sshTunnelLog("[SSHBridge] Received \(buffer.readableBytes) bytes from SSH")
+            localChannel.eventLoop.execute {
+                self.localChannel.writeAndFlush(buffer, promise: nil)
+            }
         }
     }
     
@@ -468,12 +701,16 @@ private final class SSHToLocalBridge: ChannelInboundHandler {
     }
     
     func channelInactive(context: ChannelHandlerContext) {
-        print("[SSHBridge] SSH channel inactive")
-        localChannel.close(promise: nil)
+        sshTunnelLog("[SSHBridge] SSH channel inactive")
+        localChannel.eventLoop.execute {
+            self.localChannel.close(promise: nil)
+        }
     }
     
     func errorCaught(context: ChannelHandlerContext, error: Error) {
-        print("[SSHBridge] Error: \(error)")
-        localChannel.close(promise: nil)
+        sshTunnelLog("[SSHBridge] Error: \(error)")
+        localChannel.eventLoop.execute {
+            self.localChannel.close(promise: nil)
+        }
     }
 }

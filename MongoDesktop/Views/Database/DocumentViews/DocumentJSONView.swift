@@ -7,7 +7,23 @@ struct DocumentJSONView: View {
     let documents: [BSONDocument]
     let timeZone: TimeZone
     let isLoading: Bool
+    let onEdit: (BSONDocument) -> Void
+    let onDelete: ([BSONDocument]) -> Void
     @State private var selectedNodeID: String? = nil
+
+    init(
+        documents: [BSONDocument],
+        timeZone: TimeZone,
+        isLoading: Bool,
+        onEdit: @escaping (BSONDocument) -> Void = { _ in },
+        onDelete: @escaping ([BSONDocument]) -> Void = { _ in }
+    ) {
+        self.documents = documents
+        self.timeZone = timeZone
+        self.isLoading = isLoading
+        self.onEdit = onEdit
+        self.onDelete = onDelete
+    }
 
     var body: some View {
         if isLoading && documents.isEmpty {
@@ -32,7 +48,12 @@ struct DocumentJSONView: View {
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 10) {
                     ForEach(documents.indices, id: \.self) { index in
-                        JSONDocumentCard(wrapper: wrapper(for: documents[index], index: index), selectedNodeID: $selectedNodeID)
+                        JSONDocumentCard(
+                            wrapper: wrapper(for: documents[index], index: index),
+                            selectedNodeID: $selectedNodeID,
+                            onEdit: onEdit,
+                            onDelete: { doc in onDelete([doc]) }
+                        )
                     }
                 }
                 .padding(16)
@@ -73,6 +94,8 @@ struct DocumentJSONView: View {
 struct JSONDocumentCard: View {
     let wrapper: JSONDocumentWrapper
     @Binding var selectedNodeID: String?
+    var onEdit: ((BSONDocument) -> Void)? = nil
+    var onDelete: ((BSONDocument) -> Void)? = nil
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -98,6 +121,26 @@ struct JSONDocumentCard: View {
                 .stroke(Color.primary.opacity(0.07), lineWidth: 1)
         )
         .contextMenu {
+            if let onEdit {
+                Button {
+                    onEdit(self.wrapper.document)
+                } label: {
+                    Label("Edit Document", systemImage: "pencil")
+                }
+            }
+            
+            if let onDelete {
+                Button(role: .destructive) {
+                    onDelete(self.wrapper.document)
+                } label: {
+                    Label("Delete Document", systemImage: "trash")
+                }
+            }
+            
+            if onEdit != nil || onDelete != nil {
+                Divider()
+            }
+
             Button {
                 NSPasteboard.general.clearContents()
                 NSPasteboard.general.setString(self.wrapper.document.toCanonicalExtendedJSONString(), forType: .string)

@@ -34,22 +34,86 @@ final class DatabaseSessionViewModel: ObservableObject {
 
             do {
                 let uri: String
+                let fallbackURI: String?
+                let forwardMap: [String: Int]?
+                let fallbackForwardMap: [String: Int]?
                 if connection.useSSHTunnel {
-                    statusMessage = "Setting up SSH SOCKS5 proxy…"
+                    statusMessage = "Setting up SSH tunnel…"
                     #if DEBUG
-                    print("[SSH] Starting SOCKS5 proxy → \(connection.sshTunnel.sshUser)@\(connection.sshTunnel.sshHost):\(connection.sshTunnel.sshPort)")
+                    print("[SSH] Starting local forwarding → \(connection.sshTunnel.sshUser)@\(connection.sshTunnel.sshHost):\(connection.sshTunnel.sshPort)")
                     #endif
-                    let localPort = try await SSHTunnelService.shared.startSOCKS5Proxy(config: connection.sshTunnel)
-                    uri = connection.tunnelConnectionString(localPort: localPort)
+
+                    let targets: [SSHForwardTarget]
+                    let extraOptions: [String: String]
+                    let directConnection: Bool
+
+                    if connection.useSRV {
+                        statusMessage = "Resolving MongoDB SRV records…"
+                        let (records, txt) = await DNSDebugService.resolveSRVAndTXT(host: connection.host)
+                        guard !records.isEmpty else {
+                            throw SSHTunnelError.configInvalid("No SRV records found for \(connection.host)")
+                        }
+                        targets = records.map {
+                            SSHForwardTarget(host: $0.target, port: Int($0.port))
+                        }
+                        extraOptions = txt.items
+                        directConnection = false
+                    } else {
+                        targets = [SSHForwardTarget(host: connection.host, port: connection.port)]
+                        extraOptions = [:]
+                        directConnection = true
+                    }
+
+                    statusMessage = "Opening SSH forwards…"
+                    let forwards = try await SSHTunnelService.shared.startLocalForwarding(
+                        config: connection.sshTunnel,
+                        targets: targets
+                    )
+                    let endpoints = forwards.map { "\($0.remoteHost):\($0.remotePort)" }
+                    forwardMap = Dictionary(
+                        uniqueKeysWithValues: forwards.map {
+                            ("\($0.remoteHost.lowercased()):\($0.remotePort)", $0.localPort)
+                        }
+                    )
+                    uri = connection.localForwardConnectionString(
+                        endpoints: endpoints,
+                        extraOptions: extraOptions,
+                        directConnection: directConnection
+                    )
+                    if connection.useSRV, let firstForward = forwards.first {
+                        let firstEndpoint = "\(firstForward.remoteHost):\(firstForward.remotePort)"
+                        fallbackURI = connection.localForwardConnectionString(
+                            endpoints: [firstEndpoint],
+                            extraOptions: extraOptions,
+                            directConnection: true
+                        )
+                        fallbackForwardMap = [
+                            "\(firstForward.remoteHost.lowercased()):\(firstForward.remotePort)": firstForward.localPort
+                        ]
+                    } else {
+                        fallbackURI = nil
+                        fallbackForwardMap = nil
+                    }
                     #if DEBUG
-                    print("[SSH] SOCKS5 proxy ready on port \(localPort)")
+                    print("[SSH] Local forwards ready: \(forwards)")
                     print("[SSH] MongoDB URI: \(uri)")
                     #endif
                 } else {
                     uri = connection.connectionString
+                    fallbackURI = nil
+                    forwardMap = nil
+                    fallbackForwardMap = nil
                 }
 
-                try await mongoService.connect(uri: uri)
+                do {
+                    try await mongoService.connect(uri: uri, tunnelForwardMap: forwardMap)
+                } catch {
+                    guard let fallbackURI else { throw error }
+                    #if DEBUG
+                    print("[SSH] Seed-list connection failed, retrying direct local forward: \(fallbackURI)")
+                    #endif
+                    try await mongoService.connect(uri: fallbackURI, tunnelForwardMap: fallbackForwardMap)
+                }
                 isConnected = true
                 statusMessage = "Connected: \(connection.name)"
                 store.markConnected(connection.id)

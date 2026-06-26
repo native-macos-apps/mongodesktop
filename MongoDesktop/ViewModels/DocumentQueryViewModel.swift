@@ -13,6 +13,7 @@ final class DocumentQueryViewModel: ObservableObject {
     @Published var projectionText = "{}"
     @Published var isAdvancedQuery = false
     @Published var viewMode: DocumentViewMode = .json
+    @Published var showAddSheet = false
 
     // MARK: - Pagination
 
@@ -195,6 +196,167 @@ final class DocumentQueryViewModel: ObservableObject {
         offset = 0
         totalDocuments = 0
         lastQueryDuration = nil
+    }
+
+    // MARK: - Mutations
+
+    func insertDocument(
+        database: String,
+        collection: String,
+        document: BSONDocument,
+        session: DatabaseSessionViewModel
+    ) async -> Bool {
+        isLoading = true
+        session.lastError = nil
+        let start = Date()
+        let queryLabel = document.toRelaxedExtendedJSONString()
+        do {
+            try await mongoService.insertDocument(database: database, collection: collection, document: document)
+            let duration = Date().timeIntervalSince(start)
+            QueryHistoryStore.shared.record(
+                database: database,
+                collection: collection,
+                queryType: .insert,
+                queryText: queryLabel,
+                duration: duration,
+                resultCount: 1
+            )
+            await runFind(database: database, collection: collection, session: session)
+            return true
+        } catch {
+            let duration = Date().timeIntervalSince(start)
+            session.lastError = error.localizedDescription
+            QueryHistoryStore.shared.record(
+                database: database,
+                collection: collection,
+                queryType: .insert,
+                queryText: queryLabel,
+                duration: duration,
+                isError: true,
+                errorMessage: error.localizedDescription
+            )
+            isLoading = false
+            return false
+        }
+    }
+
+    func replaceDocument(
+        database: String,
+        collection: String,
+        originalDocument: BSONDocument,
+        replacement: BSONDocument,
+        session: DatabaseSessionViewModel
+    ) async -> Bool {
+        isLoading = true
+        session.lastError = nil
+        let start = Date()
+
+        let filter: BSONDocument
+        if let id = originalDocument["_id"] {
+            filter = ["_id": id]
+        } else {
+            filter = originalDocument
+        }
+
+        var finalReplacement = replacement
+        if let originalId = originalDocument["_id"] {
+            if finalReplacement["_id"] == nil {
+                finalReplacement["_id"] = originalId
+            } else if finalReplacement["_id"] != originalId {
+                session.lastError = "Cannot modify the immutable field '_id'."
+                isLoading = false
+                return false
+            }
+        }
+
+        let queryLabel = "Filter: \(filter.toRelaxedExtendedJSONString()), Replacement: \(finalReplacement.toRelaxedExtendedJSONString())"
+
+        do {
+            try await mongoService.replaceDocument(
+                database: database,
+                collection: collection,
+                filter: filter,
+                replacement: finalReplacement
+            )
+            let duration = Date().timeIntervalSince(start)
+            QueryHistoryStore.shared.record(
+                database: database,
+                collection: collection,
+                queryType: .update,
+                queryText: queryLabel,
+                duration: duration,
+                resultCount: 1
+            )
+            await runFind(database: database, collection: collection, session: session)
+            return true
+        } catch {
+            let duration = Date().timeIntervalSince(start)
+            session.lastError = error.localizedDescription
+            QueryHistoryStore.shared.record(
+                database: database,
+                collection: collection,
+                queryType: .update,
+                queryText: queryLabel,
+                duration: duration,
+                isError: true,
+                errorMessage: error.localizedDescription
+            )
+            isLoading = false
+            return false
+        }
+    }
+
+    func deleteDocuments(
+        database: String,
+        collection: String,
+        documents: [BSONDocument],
+        session: DatabaseSessionViewModel
+    ) async -> Bool {
+        isLoading = true
+        session.lastError = nil
+        let start = Date()
+
+        // Build filters
+        let filters: [BSONDocument] = documents.map { doc in
+            if let id = doc["_id"] {
+                return ["_id": id]
+            } else {
+                return doc
+            }
+        }
+
+        let queryLabel = "Deleted \(documents.count) documents. Filters: " + filters.map { $0.toRelaxedExtendedJSONString() }.joined(separator: ", ")
+
+        do {
+            for filter in filters {
+                try await mongoService.deleteDocument(database: database, collection: collection, filter: filter)
+            }
+            let duration = Date().timeIntervalSince(start)
+            QueryHistoryStore.shared.record(
+                database: database,
+                collection: collection,
+                queryType: .delete,
+                queryText: queryLabel,
+                duration: duration,
+                resultCount: documents.count
+            )
+            await runFind(database: database, collection: collection, session: session)
+            return true
+        } catch {
+            let duration = Date().timeIntervalSince(start)
+            session.lastError = error.localizedDescription
+            QueryHistoryStore.shared.record(
+                database: database,
+                collection: collection,
+                queryType: .delete,
+                queryText: queryLabel,
+                duration: duration,
+                isError: true,
+                errorMessage: error.localizedDescription
+            )
+            isLoading = false
+            return false
+        }
     }
 
     private func isCurrentFind(_ generation: Int) -> Bool {

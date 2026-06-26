@@ -163,6 +163,13 @@ struct DatabaseDetailView: View {
 
     private var documentFooterControls: some View {
         HStack(spacing: 4) {
+            Button(action: { findVM.showAddSheet = true }) {
+                Image(systemName: "plus")
+                    .font(.caption.weight(.semibold))
+            }
+            .buttonStyle(.bordered)
+            .help("Add Document")
+
             Button(action: previousDocumentPage) {
                 Image(systemName: "chevron.left")
                     .font(.caption.weight(.semibold))

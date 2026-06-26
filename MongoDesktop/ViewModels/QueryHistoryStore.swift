@@ -21,12 +21,18 @@ enum QueryHistoryType: String {
     case find = "find"
     case aggregate = "aggregate"
     case index = "listIndexes"
+    case insert = "insert"
+    case update = "update"
+    case delete = "delete"
 
     var icon: String {
         switch self {
         case .find: return "magnifyingglass"
         case .aggregate: return "square.3.layers.3d.down.right.fill"
         case .index: return "list.bullet.rectangle"
+        case .insert: return "plus.circle"
+        case .update: return "pencil.circle"
+        case .delete: return "trash.circle"
         }
     }
 
@@ -35,6 +41,9 @@ enum QueryHistoryType: String {
         case .find: return .blue
         case .aggregate: return .purple
         case .index: return .orange
+        case .insert: return .green
+        case .update: return .yellow
+        case .delete: return .red
         }
     }
 }

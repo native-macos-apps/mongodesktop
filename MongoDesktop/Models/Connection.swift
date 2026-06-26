@@ -123,12 +123,59 @@ struct ConnectionProfile: Identifiable, Codable, Hashable {
     /// Uses the real host and adds the proxy option.
     func tunnelConnectionString(localPort: Int) -> String {
         var uri = buildURI(maskPassword: false)
-        let proxyArg = "proxy=socks5://127.0.0.1:\(localPort)"
+        let proxyArg = "proxyHost=127.0.0.1&proxyPort=\(localPort)"
         if uri.contains("?") {
             uri += "&\(proxyArg)"
         } else {
             uri += "?\(proxyArg)"
         }
+        return uri
+    }
+
+    /// URI used when MongoDB traffic is forwarded through local SSH ports.
+    /// SRV records are flattened before calling this, so the driver sees a normal seed list.
+    func localForwardConnectionString(
+        endpoints: [String],
+        extraOptions: [String: String] = [:],
+        directConnection: Bool = false
+    ) -> String {
+        var uri = "mongodb://"
+
+        if !username.isEmpty {
+            let user = ConnectionProfile.percentEncode(username)
+            uri += user
+            if !password.isEmpty {
+                let pass = ConnectionProfile.percentEncode(password)
+                uri += ":\(pass)"
+            }
+            uri += "@"
+        }
+
+        uri += endpoints.joined(separator: ",")
+
+        if !database.isEmpty {
+            uri += "/\(database)"
+        }
+
+        var optionMap: [String: String] = extraOptions
+        if !authDatabase.isEmpty {
+            optionMap["authSource"] = authDatabase
+        }
+        if useSSL {
+            optionMap["tls"] = "true"
+        }
+        if directConnection {
+            optionMap["directConnection"] = "true"
+        }
+
+        let queryItems = optionMap
+            .sorted { $0.key < $1.key }
+            .map { "\($0.key)=\($0.value)" }
+
+        if !queryItems.isEmpty {
+            uri += "?" + queryItems.joined(separator: "&")
+        }
+
         return uri
     }
 

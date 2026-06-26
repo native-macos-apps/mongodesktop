@@ -435,6 +435,9 @@ struct ConnectionEditorView: View {
             }
 
             var testURI: String
+            var fallbackTestURI: String?
+            var forwardMap: [String: Int]?
+            var fallbackForwardMap: [String: Int]?
             var tunnelStarted = false
 
             do {
@@ -452,23 +455,78 @@ struct ConnectionEditorView: View {
                     log += "\nStep 2: Skip Key Check (using Password Auth)\n"
                 }
 
-                // ── STEP 2: SSH SOCKS5 Proxy setup ──────────────────────────
+                // ── STEP 2: SSH local forwarding setup ───────────────────────
                 if profile.useSSHTunnel {
-                    log += "\nStep 3: Establish SSH SOCKS5 Proxy\n"
+                    _ = SSHTunnelDebugLog.shared.drain()
+                    log += "\nStep 3: Establish SSH Local Forwards\n"
                     let ssh = profile.sshTunnel
                     log += "  • Connecting to \(ssh.sshUser)@\(ssh.sshHost):\(ssh.sshPort)...\n"
 
                     do {
-                        let localPort = try await SSHTunnelService.shared.startSOCKS5Proxy(config: ssh)
+                        let targets: [SSHForwardTarget]
+                        let extraOptions: [String: String]
+                        let directConnection: Bool
+
+                        if profile.useSRV {
+                            log += "  • Resolving SRV/TXT for \(profile.host)...\n"
+                            let (records, txt) = await DNSDebugService.resolveSRVAndTXT(host: profile.host)
+                            guard !records.isEmpty else {
+                                throw SSHTunnelError.configInvalid("No SRV records found for \(profile.host)")
+                            }
+                            targets = records.map {
+                                SSHForwardTarget(host: $0.target, port: Int($0.port))
+                            }
+                            extraOptions = txt.items
+                            directConnection = false
+                            for target in targets {
+                                log += "    - \(target.host):\(target.port)\n"
+                            }
+                        } else {
+                            targets = [SSHForwardTarget(host: profile.host, port: profile.port)]
+                            extraOptions = [:]
+                            directConnection = true
+                        }
+
+                        let forwards = try await SSHTunnelService.shared.startLocalForwarding(config: ssh, targets: targets)
                         tunnelStarted = true
-                        testURI = profile.tunnelConnectionString(localPort: localPort)
-                        log += "  ✓ SOCKS5 proxy established on port \(localPort)\n"
+                        let endpoints = forwards.map { "\($0.remoteHost):\($0.remotePort)" }
+                        forwardMap = Dictionary(
+                            uniqueKeysWithValues: forwards.map {
+                                ("\($0.remoteHost.lowercased()):\($0.remotePort)", $0.localPort)
+                            }
+                        )
+                        testURI = profile.localForwardConnectionString(
+                            endpoints: endpoints,
+                            extraOptions: extraOptions,
+                            directConnection: directConnection
+                        )
+                        if profile.useSRV, let firstForward = forwards.first {
+                            let firstEndpoint = "\(firstForward.remoteHost):\(firstForward.remotePort)"
+                            fallbackTestURI = profile.localForwardConnectionString(
+                                endpoints: [firstEndpoint],
+                                extraOptions: extraOptions,
+                                directConnection: true
+                            )
+                            fallbackForwardMap = [
+                                "\(firstForward.remoteHost.lowercased()):\(firstForward.remotePort)": firstForward.localPort
+                            ]
+                        } else {
+                            fallbackTestURI = nil
+                            fallbackForwardMap = nil
+                        }
+                        log += "  ✓ SSH forwards established\n"
+                        for forward in forwards {
+                            log += "    - \(forward.localHost):\(forward.localPort) → \(forward.remoteHost):\(forward.remotePort)\n"
+                        }
                     } catch {
-                        log += "  ✗ Proxy failed: \(error.localizedDescription)\n"
+                        log += "  ✗ SSH forwarding failed: \(error.localizedDescription)\n"
                         throw error
                     }
                 } else {
                     testURI = profile.connectionString
+                    fallbackTestURI = nil
+                    forwardMap = nil
+                    fallbackForwardMap = nil
                     log += "\nStep 2: No SSH Tunnel required\n"
                 }
 
@@ -478,10 +536,24 @@ struct ConnectionEditorView: View {
                 log += "  • Pinging MongoDB...\n"
 
                 do {
-                    try await MongoService.shared.testConnection(uri: testURI)
+                    do {
+                        try await MongoService.shared.testConnection(uri: testURI, tunnelForwardMap: forwardMap)
+                    } catch {
+                        guard let fallbackTestURI else { throw error }
+                        log += "  ! Seed-list connection failed, retrying direct local forward...\n"
+                        log += "  • Fallback URI: \(fallbackTestURI.replacingOccurrences(of: profile.password, with: "****").replacingOccurrences(of: profile.sshTunnel.password, with: "****"))\n"
+                        try await MongoService.shared.testConnection(uri: fallbackTestURI, tunnelForwardMap: fallbackForwardMap)
+                    }
                     log += "  ✓ MongoDB ping succeeded!\n"
                 } catch {
                     log += "  ✗ MongoDB connection failed: \(error.localizedDescription)\n"
+                    let sshTrace = SSHTunnelDebugLog.shared.drain()
+                    if !sshTrace.isEmpty {
+                        log += "\nSSH Forward Trace\n"
+                        for line in sshTrace {
+                            log += "  \(line)\n"
+                        }
+                    }
                     if error.localizedDescription.contains("connection closed") {
                         log += "  ! HINT: This often means the server expects SSL/TLS but it is disabled, or the target host/port is not accessible through the tunnel.\n"
                     }

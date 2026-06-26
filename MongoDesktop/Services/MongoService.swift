@@ -2,6 +2,132 @@ import Foundation
 import Darwin
 import SwiftBSON
 
+private final class MongoTunnelForwardContext {
+    let localPortsByRemoteEndpoint: [String: Int]
+
+    init(localPortsByRemoteEndpoint: [String: Int]) {
+        self.localPortsByRemoteEndpoint = localPortsByRemoteEndpoint
+    }
+}
+
+private let mongoTunnelStreamInitiator: mongoc_stream_initiator_t = { uri, host, userData, error in
+    guard let uri, let host, let userData else { return nil }
+
+    let context = Unmanaged<MongoTunnelForwardContext>
+        .fromOpaque(userData)
+        .takeUnretainedValue()
+    let requestedHost = mongoHostName(host)
+    let requestedPort = Int(host.pointee.port)
+    let endpointKey = "\(requestedHost.lowercased()):\(requestedPort)"
+
+    guard let localPort = context.localPortsByRemoteEndpoint[endpointKey] else {
+        if let error {
+            error.pointee.domain = MONGOC_ERROR_STREAM.rawValue
+            error.pointee.code = MONGOC_ERROR_STREAM_CONNECT.rawValue
+            setBSONErrorMessage(error, "No SSH forward for \(requestedHost):\(requestedPort)")
+        }
+        return nil
+    }
+
+    guard let socket = mongoc_socket_new(AF_INET, SOCK_STREAM, 0) else {
+        if let error {
+            error.pointee.domain = MONGOC_ERROR_STREAM.rawValue
+            error.pointee.code = MONGOC_ERROR_STREAM_CONNECT.rawValue
+            setBSONErrorMessage(error, "Could not create socket for SSH forward")
+        }
+        return nil
+    }
+
+    var address = sockaddr_in()
+    address.sin_len = UInt8(MemoryLayout<sockaddr_in>.size)
+    address.sin_family = sa_family_t(AF_INET)
+    address.sin_port = in_port_t(UInt16(localPort).bigEndian)
+    inet_pton(AF_INET, "127.0.0.1", &address.sin_addr)
+
+    let connectResult = withUnsafePointer(to: &address) { pointer in
+        pointer.withMemoryRebound(to: sockaddr.self, capacity: 1) {
+            mongoc_socket_connect(
+                socket,
+                $0,
+                mongoc_socklen_t(MemoryLayout<sockaddr_in>.size),
+                bson_get_monotonic_time() + 10_000_000
+            )
+        }
+    }
+
+    guard connectResult == 0 else {
+        let errnoValue = mongoc_socket_errno(socket)
+        mongoc_socket_destroy(socket)
+        if let error {
+            error.pointee.domain = MONGOC_ERROR_STREAM.rawValue
+            error.pointee.code = MONGOC_ERROR_STREAM_CONNECT.rawValue
+            setBSONErrorMessage(error, "Could not connect SSH forward for \(requestedHost):\(requestedPort) via 127.0.0.1:\(localPort) (errno \(errnoValue))")
+        }
+        return nil
+    }
+
+    guard var stream = mongoc_stream_socket_new(socket) else {
+        mongoc_socket_destroy(socket)
+        if let error {
+            error.pointee.domain = MONGOC_ERROR_STREAM.rawValue
+            error.pointee.code = MONGOC_ERROR_STREAM_CONNECT.rawValue
+            setBSONErrorMessage(error, "Could not create Mongo stream for SSH forward")
+        }
+        return nil
+    }
+
+    print("Mongo SSH tunnel stream: \(requestedHost):\(requestedPort) -> 127.0.0.1:\(localPort)")
+
+    guard mongoc_uri_get_tls(uri) else {
+        return stream
+    }
+
+    var tlsOptions = mongoc_ssl_opt_get_default().pointee
+    let insecure = mongoc_uri_get_option_as_bool(uri, "tlsinsecure", false)
+    tlsOptions.pem_file = mongoc_uri_get_option_as_utf8(uri, "tlscertificatekeyfile", nil)
+    tlsOptions.pem_pwd = mongoc_uri_get_option_as_utf8(uri, "tlscertificatekeyfilepassword", nil)
+    tlsOptions.ca_file = mongoc_uri_get_option_as_utf8(uri, "tlscafile", nil)
+    tlsOptions.weak_cert_validation = mongoc_uri_get_option_as_bool(uri, "tlsallowinvalidcertificates", insecure)
+    tlsOptions.allow_invalid_hostname = mongoc_uri_get_option_as_bool(uri, "tlsallowinvalidhostnames", insecure)
+
+    let originalStream = stream
+    guard let tlsStream = mongoc_stream_tls_new_with_hostname(stream, requestedHost, &tlsOptions, 1) else {
+        mongoc_stream_destroy(originalStream)
+        if let error {
+            error.pointee.domain = MONGOC_ERROR_STREAM.rawValue
+            error.pointee.code = MONGOC_ERROR_STREAM_SOCKET.rawValue
+            setBSONErrorMessage(error, "Could not initialize TLS over SSH forward for \(requestedHost):\(requestedPort)")
+        }
+        return nil
+    }
+
+    guard mongoc_stream_tls_handshake_block(tlsStream, requestedHost, 10_000, error) else {
+        mongoc_stream_destroy(tlsStream)
+        return nil
+    }
+
+    return tlsStream
+}
+
+private func mongoHostName(_ host: UnsafePointer<mongoc_host_list_t>) -> String {
+    var mutableHost = host.pointee.host
+    return withUnsafePointer(to: &mutableHost) { pointer in
+        pointer.withMemoryRebound(to: CChar.self, capacity: Int(BSON_HOST_NAME_MAX + 1)) {
+            String(cString: $0)
+        }
+    }
+}
+
+private func setBSONErrorMessage(_ error: UnsafeMutablePointer<bson_error_t>, _ message: String) {
+    withUnsafeMutablePointer(to: &error.pointee.message) { pointer in
+        pointer.withMemoryRebound(to: CChar.self, capacity: 504) { buffer in
+            _ = message.withCString { source in
+                strlcpy(buffer, source, 504)
+            }
+        }
+    }
+}
+
 struct CollectionInfo {
     let name: String
     let isTimeSeries: Bool
@@ -12,6 +138,7 @@ actor MongoService {
 
     private var client: OpaquePointer?
     private var connectedURI: String?
+    private var streamInitiatorContexts: [OpaquePointer: UnsafeMutableRawPointer] = [:]
 
     private static let initialized: Void = {
         // Prefer TCP for SRV lookups to avoid resolver/network paths that drop UDP DNS responses.
@@ -27,7 +154,7 @@ actor MongoService {
         _ = MongoService.initialized
     }
 
-    func connect(uri: String) async throws {
+    func connect(uri: String, tunnelForwardMap: [String: Int]? = nil) async throws {
         if connectedURI == uri, client != nil {
             return
         }
@@ -35,12 +162,12 @@ actor MongoService {
         try await disconnect()
         ensureInitialized()
 
-        let newClient = try await createClient(uri: uri)
+        let newClient = try await createClient(uri: uri, tunnelForwardMap: tunnelForwardMap)
 
         do {
             try ping(client: newClient)
         } catch {
-            mongoc_client_destroy(newClient)
+            destroyClient(newClient)
             throw error
         }
 
@@ -48,10 +175,10 @@ actor MongoService {
         self.connectedURI = uri
     }
 
-    func testConnection(uri: String) async throws {
+    func testConnection(uri: String, tunnelForwardMap: [String: Int]? = nil) async throws {
         ensureInitialized()
-        let tempClient = try await createClient(uri: uri)
-        defer { mongoc_client_destroy(tempClient) }
+        let tempClient = try await createClient(uri: uri, tunnelForwardMap: tunnelForwardMap)
+        defer { destroyClient(tempClient) }
         try ping(client: tempClient)
     }
 
@@ -92,7 +219,7 @@ actor MongoService {
 
     func disconnect() async throws {
         if let client {
-            mongoc_client_destroy(client)
+            destroyClient(client)
             self.client = nil
         }
         connectedURI = nil
@@ -306,6 +433,101 @@ actor MongoService {
         }
     }
 
+    func insertDocument(
+        database: String,
+        collection: String,
+        document: BSONDocument
+    ) async throws {
+        let client = try requireClient()
+        guard let db = mongoc_client_get_database(client, database) else {
+            throw MongoServiceError.commandFailed("Could not open database '\(database)'.")
+        }
+        defer { mongoc_database_destroy(db) }
+
+        guard let coll = mongoc_database_get_collection(db, collection) else {
+            throw MongoServiceError.commandFailed("Could not open collection '\(collection)'.")
+        }
+        defer { mongoc_collection_destroy(coll) }
+
+        let docBson = try bsonFromDocument(document)
+        defer { bson_destroy(docBson) }
+
+        var reply = bson_t()
+        bson_init(&reply)
+        defer { bson_destroy(&reply) }
+        var error = bson_error_t()
+
+        let ok = mongoc_collection_insert_one(coll, docBson, nil, &reply, &error)
+        guard ok else {
+            throw MongoServiceError.commandFailed(errorMessage(error))
+        }
+    }
+
+    func replaceDocument(
+        database: String,
+        collection: String,
+        filter: BSONDocument,
+        replacement: BSONDocument
+    ) async throws {
+        let client = try requireClient()
+        guard let db = mongoc_client_get_database(client, database) else {
+            throw MongoServiceError.commandFailed("Could not open database '\(database)'.")
+        }
+        defer { mongoc_database_destroy(db) }
+
+        guard let coll = mongoc_database_get_collection(db, collection) else {
+            throw MongoServiceError.commandFailed("Could not open collection '\(collection)'.")
+        }
+        defer { mongoc_collection_destroy(coll) }
+
+        let filterBson = try bsonFromDocument(filter)
+        let replacementBson = try bsonFromDocument(replacement)
+        defer {
+            bson_destroy(filterBson)
+            bson_destroy(replacementBson)
+        }
+
+        var reply = bson_t()
+        bson_init(&reply)
+        defer { bson_destroy(&reply) }
+        var error = bson_error_t()
+
+        let ok = mongoc_collection_replace_one(coll, filterBson, replacementBson, nil, &reply, &error)
+        guard ok else {
+            throw MongoServiceError.commandFailed(errorMessage(error))
+        }
+    }
+
+    func deleteDocument(
+        database: String,
+        collection: String,
+        filter: BSONDocument
+    ) async throws {
+        let client = try requireClient()
+        guard let db = mongoc_client_get_database(client, database) else {
+            throw MongoServiceError.commandFailed("Could not open database '\(database)'.")
+        }
+        defer { mongoc_database_destroy(db) }
+
+        guard let coll = mongoc_database_get_collection(db, collection) else {
+            throw MongoServiceError.commandFailed("Could not open collection '\(collection)'.")
+        }
+        defer { mongoc_collection_destroy(coll) }
+
+        let filterBson = try bsonFromDocument(filter)
+        defer { bson_destroy(filterBson) }
+
+        var reply = bson_t()
+        bson_init(&reply)
+        defer { bson_destroy(&reply) }
+        var error = bson_error_t()
+
+        let ok = mongoc_collection_delete_one(coll, filterBson, nil, &reply, &error)
+        guard ok else {
+            throw MongoServiceError.commandFailed(errorMessage(error))
+        }
+    }
+
     func runAggregate(
         database: String,
         collection: String,
@@ -455,7 +677,7 @@ actor MongoService {
         return client
     }
 
-    private func createClient(uri: String) async throws -> OpaquePointer {
+    private func createClient(uri: String, tunnelForwardMap: [String: Int]? = nil) async throws -> OpaquePointer {
         var error = bson_error_t()
         guard let parsed = mongoc_uri_new_with_error(uri, &error) else {
             let msg = errorMessage(error)
@@ -470,7 +692,24 @@ actor MongoService {
             let detail = msg.isEmpty ? "Failed to initialize Mongo client." : "Failed to initialize Mongo client: \(msg)"
             throw MongoServiceError.connectionFailed("\(detail)\nURI: \(redactedURI(uri))\nDomain: \(createError.domain)  Code: \(createError.code)")
         }
+
+        if let tunnelForwardMap, !tunnelForwardMap.isEmpty {
+            let context = MongoTunnelForwardContext(localPortsByRemoteEndpoint: tunnelForwardMap)
+            let contextPointer = Unmanaged.passRetained(context).toOpaque()
+            mongoc_client_set_stream_initiator(client, mongoTunnelStreamInitiator, contextPointer)
+            streamInitiatorContexts[client] = contextPointer
+        }
+
         return client
+    }
+
+    private func destroyClient(_ client: OpaquePointer) {
+        mongoc_client_destroy(client)
+        if let streamInitiatorContext = streamInitiatorContexts.removeValue(forKey: client) {
+            Unmanaged<MongoTunnelForwardContext>
+                .fromOpaque(streamInitiatorContext)
+                .release()
+        }
     }
 
     private func bsonFromDocument(_ doc: BSONDocument) throws -> UnsafeMutablePointer<bson_t> {
