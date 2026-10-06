@@ -29,6 +29,7 @@ final class DocumentQueryViewModel: ObservableObject {
         didSet {
             tableCacheController.invalidate()
             documentTableCache = nil
+            cachedSchemaFields = nil
         }
     }
     @Published var selectedRowIds: Set<String> = []
@@ -38,6 +39,7 @@ final class DocumentQueryViewModel: ObservableObject {
     // MARK: - Cache
 
     @Published private(set) var documentTableCache: TableDataCache?
+    private var cachedSchemaFields: [QueryCompletionItem]?
     private let tableCacheController = TableCacheController()
 
     // MARK: - Task Tracking
@@ -57,6 +59,15 @@ final class DocumentQueryViewModel: ObservableObject {
 
     var documentKeysForCompletion: [String] {
         documentTableCache?.columns ?? []
+    }
+
+    var schemaFieldsForCompletion: [QueryCompletionItem] {
+        if let cached = cachedSchemaFields {
+            return cached
+        }
+        let fields = FieldSchemaExtractor.extractFields(from: documents)
+        cachedSchemaFields = fields
+        return fields
     }
 
     var tableCacheRequestID: Int {

@@ -188,6 +188,8 @@ struct CollectionDocumentView: View {
                     text: $findVM.filterText,
                     errorMessage: $filterError,
                     documentKeys: findVM.documentKeysForCompletion,
+                    schemaFields: findVM.schemaFieldsForCompletion,
+                    editorMode: .findFilter,
                     minHeight: 28
                 )
                 .frame(maxWidth: .infinity)
@@ -261,6 +263,8 @@ struct CollectionDocumentView: View {
                     text: $findVM.sortText,
                     errorMessage: $sortError,
                     documentKeys: findVM.documentKeysForCompletion,
+                    schemaFields: findVM.schemaFieldsForCompletion,
+                    editorMode: .sort,
                     minHeight: 28
                 )
                 .frame(maxWidth: .infinity)
@@ -280,6 +284,8 @@ struct CollectionDocumentView: View {
                     text: $findVM.projectionText,
                     errorMessage: $projectionError,
                     documentKeys: findVM.documentKeysForCompletion,
+                    schemaFields: findVM.schemaFieldsForCompletion,
+                    editorMode: .projection,
                     minHeight: 28
                 )
                 .frame(maxWidth: .infinity)

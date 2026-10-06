@@ -77,6 +77,8 @@ struct CollectionAggregateView: View {
                     text: $aggregateVM.pipelineText,
                     errorMessage: $pipelineError,
                     documentKeys: findVM.documentKeysForCompletion,
+                    schemaFields: findVM.schemaFieldsForCompletion,
+                    editorMode: .aggregatePipeline,
                     minHeight: 80
                 )
                 .frame(maxWidth: .infinity)

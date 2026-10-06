@@ -11,6 +11,8 @@ struct JSONEditorView: NSViewRepresentable {
     @Binding var text: String
     @Binding var errorMessage: String?
     var documentKeys: [String] = []
+    var schemaFields: [QueryCompletionItem] = []
+    var editorMode: QueryEditorMode = .findFilter
 
     var minHeight: CGFloat = 72
 
@@ -21,6 +23,9 @@ struct JSONEditorView: NSViewRepresentable {
     func makeNSView(context: Context) -> NSScrollView {
         let textView = JSONTextView()
         textView.delegate = context.coordinator
+        textView.coordinator = context.coordinator
+        context.coordinator.textView = textView
+        context.coordinator.setupCompletion()
         textView.string = text
         textView.drawsBackground = false
         textView.isVerticallyResizable = true
@@ -44,6 +49,13 @@ struct JSONEditorView: NSViewRepresentable {
         scroll.documentView = textView
         scroll.translatesAutoresizingMaskIntoConstraints = false
         scroll.heightAnchor.constraint(greaterThanOrEqualToConstant: minHeight).isActive = true
+        scroll.contentView.postsBoundsChangedNotifications = true
+        NotificationCenter.default.addObserver(
+            context.coordinator,
+            selector: #selector(Coordinator.handleScrollBoundsChanged),
+            name: NSView.boundsDidChangeNotification,
+            object: scroll.contentView
+        )
 
         context.coordinator.refresh(in: textView, forceValidation: true)
         return scroll
@@ -53,6 +65,7 @@ struct JSONEditorView: NSViewRepresentable {
         guard let textView = nsView.documentView as? JSONTextView else { return }
         context.coordinator.parent = self
         context.coordinator.documentKeys = documentKeys
+        context.coordinator.schemaFields = schemaFields
         if textView.string != text {
             context.coordinator.isUpdating = true
             textView.string = text
@@ -64,14 +77,20 @@ struct JSONEditorView: NSViewRepresentable {
         }
     }
 
+    @MainActor
     final class Coordinator: NSObject, NSTextViewDelegate {
         var parent: JSONEditorView
+        weak var textView: JSONTextView?
+        let completionController = QueryCompletionWindowController()
+        private var completionWorkItem: DispatchWorkItem?
         private let highlighter = JSONSyntaxHighlighter()
         private var validateWorkItem: DispatchWorkItem?
         /// Set to true when we are programmatically mutating the text view so that
         /// `textDidChange` does not write back to the @Binding (which would publish
         /// a state change inside a SwiftUI view-update and trigger the warning).
         var isUpdating: Bool = false
+        var documentKeys: [String] = []
+        var schemaFields: [QueryCompletionItem] = []
         private let autoPairs: [String: String] = [
             "\"": "\"",
             "{": "}",
@@ -82,6 +101,60 @@ struct JSONEditorView: NSViewRepresentable {
 
         init(_ parent: JSONEditorView) {
             self.parent = parent
+            super.init()
+        }
+
+        func setupCompletion() {
+            completionController.onItemSelected = { [weak self] item in
+                guard let self = self, let tv = self.textView else { return }
+                self.applyCompletion(item, in: tv)
+                self.completionController.hide()
+            }
+        }
+
+        func dismissCompletion() {
+            completionWorkItem?.cancel()
+            completionController.hide()
+        }
+
+        @objc func handleScrollBoundsChanged(_ notification: Notification) {
+            dismissCompletion()
+        }
+
+        func handleKeyDown(_ event: NSEvent, in textView: JSONTextView) -> Bool {
+            // Manual completion shortcuts (Ctrl+Space or Option+Esc)
+            if (event.modifierFlags.contains(.control) && event.keyCode == 49) ||
+               (event.modifierFlags.contains(.option) && event.keyCode == 53) {
+                triggerCompletion(in: textView, force: true)
+                return true
+            }
+
+            guard completionController.isVisible else {
+                return false
+            }
+
+            switch event.keyCode {
+            case 126: // Up Arrow
+                return completionController.moveUp()
+
+            case 125: // Down Arrow
+                return completionController.moveDown()
+
+            case 36, 48: // Return (36) or Tab (48)
+                if let item = completionController.selectedItem() {
+                    applyCompletion(item, in: textView)
+                    completionController.hide()
+                    return true
+                }
+                return false
+
+            case 53: // Escape
+                completionController.hide()
+                return true
+
+            default:
+                return false
+            }
         }
 
         func textDidChange(_ notification: Notification) {
@@ -95,15 +168,142 @@ struct JSONEditorView: NSViewRepresentable {
 
             applyHighlight(in: textView)
             scheduleValidation(in: textView)
-            
-            if let event = NSApp.currentEvent, event.type == .keyDown {
-                let chars = event.characters ?? ""
-                if let first = chars.first, (first.isLetter || first == "$") {
-                    DispatchQueue.main.async {
-                        textView.complete(nil)
+            scheduleCompletionTrigger(in: textView)
+        }
+
+        private func scheduleCompletionTrigger(in textView: JSONTextView) {
+            completionWorkItem?.cancel()
+            let task = DispatchWorkItem { [weak self, weak textView] in
+                guard let self = self, let textView = textView else { return }
+                self.triggerCompletion(in: textView, force: false)
+            }
+            completionWorkItem = task
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.075, execute: task)
+        }
+
+        func triggerCompletion(in textView: JSONTextView, force: Bool) {
+            guard GlobalSettings.shared.queryAutocompleteEnabled else {
+                completionController.hide()
+                return
+            }
+            if !force && !GlobalSettings.shared.autocompleteAutoTrigger {
+                return
+            }
+
+            let selectedRange = textView.selectedRange()
+            if selectedRange.length > 0 && !force {
+                completionController.hide()
+                return
+            }
+
+            let source = textView.string
+            let context = QueryContextAnalyzer.analyze(
+                text: source,
+                cursorLocation: selectedRange.location,
+                editorMode: parent.editorMode
+            )
+
+            if !force {
+                if context.partialWord.isEmpty {
+                    completionController.hide()
+                    return
+                }
+            }
+
+            var fields = !schemaFields.isEmpty ? schemaFields : parent.schemaFields
+            if fields.isEmpty {
+                let keys = !documentKeys.isEmpty ? documentKeys : parent.documentKeys
+                fields = keys.map {
+                    QueryCompletionItem(
+                        label: $0,
+                        kind: .field(type: nil),
+                        detail: "Collection field",
+                        documentation: "Collection field: `\($0)`",
+                        insertText: $0,
+                        isKey: true
+                    )
+                }
+            }
+
+            let matches = QueryContextAnalyzer.completions(context: context, collectionFields: fields)
+            guard !matches.isEmpty else {
+                completionController.hide()
+                return
+            }
+
+            let charRange = textView.selectedRange()
+            let screenRect = textView.firstRect(forCharacterRange: charRange, actualRange: nil)
+            completionController.show(
+                items: matches,
+                query: context.partialWord,
+                screenRect: screenRect,
+                parentWindow: textView.window
+            )
+        }
+
+        func applyCompletion(_ item: QueryCompletionItem, in textView: JSONTextView) {
+            guard let storage = textView.textStorage else { return }
+            let currentText = textView.string
+            let selectedRange = textView.selectedRange()
+            let context = QueryContextAnalyzer.analyze(
+                text: currentText,
+                cursorLocation: selectedRange.location,
+                editorMode: parent.editorMode
+            )
+
+            var textToInsert = item.insertText
+            let targetRange = context.replacementRange
+
+            // Check if there is already a colon after targetRange
+            let nsCurrent = currentText as NSString
+            var hasColonAfter = false
+            var searchIdx = targetRange.location + targetRange.length
+            while searchIdx < nsCurrent.length {
+                let ch = nsCurrent.character(at: searchIdx)
+                if ch == 0x20 || ch == 0x09 {
+                    searchIdx += 1
+                    continue
+                }
+                if ch == 0x3A { // ':'
+                    hasColonAfter = true
+                }
+                break
+            }
+
+            // Auto-quoting logic:
+            // If it's a key and NOT inside quotes
+            if item.isKey && !context.isInsideQuotes {
+                if !textToInsert.hasPrefix("\"") {
+                    if textToInsert == item.label {
+                        textToInsert = hasColonAfter ? "\"\(item.label)\"" : "\"\(item.label)\": "
+                    } else if let colonIdx = textToInsert.firstIndex(of: ":") {
+                        let keyPart = textToInsert[..<colonIdx].trimmingCharacters(in: .whitespaces)
+                        let restPart = textToInsert[colonIdx...]
+                        textToInsert = "\"\(keyPart)\"\(restPart)"
+                    } else {
+                        textToInsert = "\"\(textToInsert)\""
                     }
                 }
             }
+
+            // Calculate cursor location after insertion
+            let finalCursorOffset: Int
+            if let offset = item.cursorOffset {
+                let quoteShift = (item.isKey && !context.isInsideQuotes && !item.insertText.hasPrefix("\"")) ? 1 : 0
+                finalCursorOffset = targetRange.location + offset + quoteShift
+            } else {
+                finalCursorOffset = targetRange.location + (textToInsert as NSString).length
+            }
+
+            isUpdating = true
+            storage.replaceCharacters(in: targetRange, with: textToInsert)
+            let safeCursor = max(0, min(finalCursorOffset, storage.length))
+            textView.setSelectedRange(NSRange(location: safeCursor, length: 0))
+            isUpdating = false
+
+            textView.didChangeText()
+            applyHighlight(in: textView)
+            scheduleValidation(in: textView)
         }
 
         func textView(_ textView: NSTextView, shouldChangeTextIn affectedCharRange: NSRange, replacementString: String?) -> Bool {
@@ -199,48 +399,6 @@ struct JSONEditorView: NSViewRepresentable {
             textView.setSelectedRange(NSRange(location: cursorLocation, length: 0))
             textView.didChangeText()
         }
-
-        var documentKeys: [String] = []
-        private let mongoKeywords = [
-            "$eq", "$gt", "$gte", "$in", "$lt", "$lte", "$ne", "$nin",
-            "$and", "$not", "$nor", "$or",
-            "$exists", "$type",
-            "$expr", "$jsonSchema", "$mod", "$regex", "$text", "$where",
-            "$all", "$elemMatch", "$size",
-            "$bitsAllClear", "$bitsAllSet", "$bitsAnyClear", "$bitsAnySet",
-            "$match", "$group", "$project", "$sort", "$limit", "$skip", "$unwind", "$lookup", "$addFields", "$out", "$merge", "$set", "$unset", "$push", "$pull", "$inc", "$mul"
-        ]
-        private let mongoValueHelpers = [
-            "ObjectId", "ISODate", "NumberInt", "NumberLong", "NumberDecimal",
-            "BinData", "Timestamp", "MinKey", "MaxKey", "RegExp"
-        ]
-
-        func textView(_ textView: NSTextView, completions words: [String], forPartialWordRange charRange: NSRange, indexOfSelectedItem index: UnsafeMutablePointer<Int>?) -> [String] {
-            let partialWord = (textView.string as NSString).substring(with: charRange)
-            guard !partialWord.isEmpty else { return [] }
-            
-            var allCompletions = Set<String>()
-            
-            for kw in mongoKeywords {
-                if kw.lowercased().hasPrefix(partialWord.lowercased()) {
-                    allCompletions.insert(kw)
-                }
-            }
-            
-            for helper in mongoValueHelpers {
-                if helper.lowercased().hasPrefix(partialWord.lowercased()) {
-                    allCompletions.insert(helper)
-                }
-            }
-            
-            for key in documentKeys {
-                if key.lowercased().hasPrefix(partialWord.lowercased()) {
-                    allCompletions.insert(key)
-                }
-            }
-            
-            return Array(allCompletions).sorted()
-        }
     }
 }
 
@@ -312,7 +470,9 @@ enum JSONEditorFormatter {
     }
 }
 
-fileprivate final class JSONTextView: NSTextView {
+final class JSONTextView: NSTextView {
+    weak var coordinator: JSONEditorView.Coordinator?
+
     override var frame: NSRect {
         didSet {
             guard let container = textContainer else { return }
@@ -322,28 +482,21 @@ fileprivate final class JSONTextView: NSTextView {
         }
     }
 
-    override var rangeForUserCompletion: NSRange {
-        let selected = selectedRange()
-        guard selected.length == 0 else { return selected }
-
-        let nsText = string as NSString
-        var start = selected.location
-        var end = selected.location
-
-        while start > 0, isCompletionCharacter(nsText.substring(with: NSRange(location: start - 1, length: 1))) {
-            start -= 1
+    override func keyDown(with event: NSEvent) {
+        if let coord = coordinator, coord.handleKeyDown(event, in: self) {
+            return
         }
-
-        while end < nsText.length, isCompletionCharacter(nsText.substring(with: NSRange(location: end, length: 1))) {
-            end += 1
-        }
-
-        return NSRange(location: start, length: end - start)
+        super.keyDown(with: event)
     }
 
-    private func isCompletionCharacter(_ value: String) -> Bool {
-        let allowed = CharacterSet.alphanumerics.union(CharacterSet(charactersIn: "_$"))
-        return value.unicodeScalars.allSatisfy { allowed.contains($0) }
+    override func resignFirstResponder() -> Bool {
+        coordinator?.dismissCompletion()
+        return super.resignFirstResponder()
+    }
+
+    override func viewWillMove(toWindow newWindow: NSWindow?) {
+        super.viewWillMove(toWindow: newWindow)
+        coordinator?.dismissCompletion()
     }
 }
 

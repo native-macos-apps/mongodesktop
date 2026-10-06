@@ -108,10 +108,31 @@ struct GeneralSettingsTab: View {
                 .padding(.top, 2)
             }
 
+            Divider()
+
+            // Query Autocomplete Setting
+            VStack(alignment: .leading, spacing: 6) {
+                Text("Query Editor Autocomplete")
+                    .font(.headline)
+
+                Toggle("Enable Autocomplete Suggestions", isOn: $globalSettings.queryAutocompleteEnabled)
+                    .font(.callout)
+
+                if globalSettings.queryAutocompleteEnabled {
+                    Toggle("Auto-trigger while typing", isOn: $globalSettings.autocompleteAutoTrigger)
+                        .font(.callout)
+                        .padding(.leading, 16)
+                }
+
+                Text("Intelligent suggestions for MongoDB operators, aggregation stages, BSON types, and collection schema fields. Shortcut: Ctrl+Space.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
             Spacer(minLength: 0)
         }
         .padding(16)
-        .frame(width: 480, height: 230)
+        .frame(width: 480, height: 340)
     }
 
     private func exampleDateString() -> String {
