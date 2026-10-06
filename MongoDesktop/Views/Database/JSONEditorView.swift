@@ -182,14 +182,6 @@ struct JSONEditorView: NSViewRepresentable {
         }
 
         func triggerCompletion(in textView: JSONTextView, force: Bool) {
-            guard GlobalSettings.shared.queryAutocompleteEnabled else {
-                completionController.hide()
-                return
-            }
-            if !force && !GlobalSettings.shared.autocompleteAutoTrigger {
-                return
-            }
-
             let selectedRange = textView.selectedRange()
             if selectedRange.length > 0 && !force {
                 completionController.hide()

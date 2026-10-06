@@ -46,20 +46,6 @@ final class GlobalSettings: ObservableObject {
         }
     }
 
-    /// Whether query autocomplete suggestions are enabled.
-    @Published var queryAutocompleteEnabled: Bool {
-        didSet {
-            defaults.set(queryAutocompleteEnabled, forKey: Self.queryAutocompleteEnabledKey)
-        }
-    }
-
-    /// Whether autocomplete triggers automatically while typing (otherwise Ctrl+Space only).
-    @Published var autocompleteAutoTrigger: Bool {
-        didSet {
-            defaults.set(autocompleteAutoTrigger, forKey: Self.autocompleteAutoTriggerKey)
-        }
-    }
-
     var displayTimeZone: TimeZone {
         TimeZone(identifier: displayTimeZoneId) ?? .current
     }
@@ -69,8 +55,6 @@ final class GlobalSettings: ObservableObject {
     private static let mcpServerEnabledKey = "mcpServerEnabled"
     private static let mcpServerPortKey = "mcpServerPort"
     private static let mcpServerReadOnlyKey = "mcpServerReadOnly"
-    private static let queryAutocompleteEnabledKey = "queryAutocompleteEnabled"
-    private static let autocompleteAutoTriggerKey = "autocompleteAutoTrigger"
     private let defaults = UserDefaults.standard
 
     private init() {
@@ -104,18 +88,6 @@ final class GlobalSettings: ObservableObject {
             mcpServerReadOnly = defaults.bool(forKey: Self.mcpServerReadOnlyKey)
         } else {
             mcpServerReadOnly = true
-        }
-
-        if defaults.object(forKey: Self.queryAutocompleteEnabledKey) != nil {
-            queryAutocompleteEnabled = defaults.bool(forKey: Self.queryAutocompleteEnabledKey)
-        } else {
-            queryAutocompleteEnabled = true
-        }
-
-        if defaults.object(forKey: Self.autocompleteAutoTriggerKey) != nil {
-            autocompleteAutoTrigger = defaults.bool(forKey: Self.autocompleteAutoTriggerKey)
-        } else {
-            autocompleteAutoTrigger = true
         }
     }
 }
