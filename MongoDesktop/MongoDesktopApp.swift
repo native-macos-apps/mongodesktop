@@ -33,7 +33,12 @@ final class WindowCoordinator: ObservableObject {
 
 @main
 struct MongoDesktopApp: App {
-    @StateObject private var connectionStore = ConnectionStore()
+    @StateObject private var connectionStore = ConnectionStore.shared
+    @StateObject private var mcpServerManager = MCPServerManager.shared
+
+    init() {
+        MCPServerManager.shared.startIfNeeded()
+    }
 
     var body: some Scene {
         // Main window: Connections list (singleton)
@@ -58,6 +63,7 @@ struct MongoDesktopApp: App {
         Settings {
             SettingsView()
                 .environmentObject(GlobalSettings.shared)
+                .environmentObject(mcpServerManager)
         }
 
         .commands {

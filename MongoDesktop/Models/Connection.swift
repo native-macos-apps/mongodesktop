@@ -234,6 +234,8 @@ struct ConnectionProfile: Identifiable, Codable, Hashable {
 
 @MainActor
 final class ConnectionStore: ObservableObject {
+    static let shared = ConnectionStore()
+
     @Published private(set) var connections: [ConnectionProfile] = []
 
     private let fileURL: URL
@@ -243,6 +245,21 @@ final class ConnectionStore: ObservableObject {
         let folder = appSupport.appendingPathComponent("MongoDesktop", isDirectory: true)
         self.fileURL = folder.appendingPathComponent("connections.json")
         load()
+    }
+
+    /// Finds a connection profile by its name (case-insensitive) or UUID string.
+    func find(namedOrId query: String) -> ConnectionProfile? {
+        let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        if let uuid = UUID(uuidString: trimmed) {
+            if let match = connections.first(where: { $0.id == uuid }) {
+                return match
+            }
+        }
+        return connections.first {
+            $0.name.localizedCaseInsensitiveCompare(trimmed) == .orderedSame
+        } ?? connections.first {
+            $0.name.localizedCaseInsensitiveContains(trimmed)
+        }
     }
 
     func load() {
